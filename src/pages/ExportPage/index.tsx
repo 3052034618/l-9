@@ -65,12 +65,21 @@ export default function ExportPage() {
     if (selectedBills.length === 0) return;
 
     const confirmable = selectedBills.filter(
-      (id) =>
-        carrierBills.find((b) => b.id === id)?.status === 'matched' ||
-        carrierBills.find((b) => b.id === id)?.status === 'discrepancy'
+      (id) => carrierBills.find((b) => b.id === id)?.status === 'matched'
     );
 
-    if (confirmable.length === 0) return;
+    const skipped = selectedBills.length - confirmable.length;
+
+    if (confirmable.length === 0) {
+      alert('没有可确认的账单，请选择已匹配且无差异的账单');
+      return;
+    }
+
+    if (skipped > 0) {
+      if (!confirm(`已选中 ${selectedBills.length} 张账单，其中 ${confirmable.length} 张可确认（已匹配无差异），${skipped} 张将被跳过（有差异或待处理）。是否继续？`)) {
+        return;
+      }
+    }
 
     confirmBills(confirmable);
     setSelectedBills([]);
@@ -79,7 +88,7 @@ export default function ExportPage() {
       operationType: '批量确认',
       operator: '张财务',
       description: '批量确认账单',
-      detail: `确认了${confirmable.length}张账单`,
+      detail: `确认了${confirmable.length}张账单，跳过${skipped}张`,
     });
   };
 

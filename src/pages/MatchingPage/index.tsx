@@ -361,6 +361,28 @@ export default function MatchingPage() {
                   <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-500"></div>
                 </label>
               </div>
+
+              {/* Fee Type */}
+              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
+                    <Layers className="w-5 h-5 text-purple-600" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-slate-800">费用类型匹配</p>
+                    <p className="text-sm text-slate-500">不同费用类型不互配（运费/港杂费/燃油费）</p>
+                  </div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={matchingRules.feeTypeCheck}
+                    onChange={(e) => handleRuleChange('feeTypeCheck', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-500"></div>
+                </label>
+              </div>
             </div>
           </div>
 
@@ -570,14 +592,14 @@ export default function MatchingPage() {
                         </div>
 
                         <div className="flex items-center gap-2">
-                          {result.status === 'matched' && (
+                          {result.carrierBillId && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleSplit(result.id);
                               }}
                               className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg"
-                              title="拆分"
+                              title="拆分匹配"
                             >
                               <Scissors className="w-4 h-4" />
                             </button>

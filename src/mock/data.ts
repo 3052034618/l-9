@@ -352,4 +352,5 @@ export const defaultMatchingRules: MatchingRules = {
   amountEnabled: true,
   amountTolerancePercent: 5,
   currencyCheck: true,
+  feeTypeCheck: true,
 };

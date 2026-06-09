@@ -102,7 +102,8 @@ export default function ImportPage() {
   } = useAppStore();
 
   const [dragOver, setDragOver] = useState<FileType | null>(null);
-  const [previewData, setPreviewData] = useState<{ type: FileType; data: any[] } | null>(null);
+  const [previewData, setPreviewData] = useState<{ type: FileType; data: any[]; totalCount: number } | null>(null);
+  const [fullData, setFullData] = useState<{ type: FileType; data: any[] } | null>(null);
   const [importing, setImporting] = useState(false);
 
   const generateId = () => Math.random().toString(36).substring(2, 15);
@@ -122,7 +123,8 @@ export default function ImportPage() {
         const sheet = workbook.Sheets[sheetName];
         const jsonData = XLSX.utils.sheet_to_json(sheet);
 
-        setPreviewData({ type, data: jsonData.slice(0, 10) });
+        setFullData({ type, data: jsonData });
+        setPreviewData({ type, data: jsonData.slice(0, 10), totalCount: jsonData.length });
       };
       reader.readAsBinaryString(file);
     },
@@ -158,12 +160,12 @@ export default function ImportPage() {
   };
 
   const confirmImport = () => {
-    if (!previewData) return;
+    if (!fullData) return;
 
     setImporting(true);
 
     setTimeout(() => {
-      const { type, data } = previewData;
+      const { type, data } = fullData;
 
       switch (type) {
         case 'voyage': {
@@ -251,6 +253,7 @@ export default function ImportPage() {
       });
 
       setPreviewData(null);
+      setFullData(null);
       setImporting(false);
     }, 800);
   };
@@ -444,7 +447,9 @@ export default function ImportPage() {
                           { 账单号: 'BILL001', 承运商: '示例承运商', 船名: '示例船', 航次号: 'V001', 账单日期: '2024-01-10', 费用类型: '运费', 装货港: '上海', 卸货港: '新加坡', 币种: 'USD', 总金额: 50000 },
                         ],
                       };
-                      setPreviewData({ type: section.type, data: mockData[section.type] });
+                      const data = mockData[section.type];
+                      setFullData({ type: section.type, data });
+                      setPreviewData({ type: section.type, data: data.slice(0, 10), totalCount: data.length });
                     }}
                   >
                     <Plus className="w-4 h-4" />
@@ -466,11 +471,14 @@ export default function ImportPage() {
                 <h3 className="font-semibold text-slate-800">数据预览</h3>
                 <p className="text-sm text-slate-500">
                   {importSections.find((s) => s.type === previewData.type)?.title} - 共{' '}
-                  {previewData.data.length} 条记录（显示前10条）
+                  {previewData.totalCount} 条记录（显示前10条预览）
                 </p>
               </div>
               <button
-                onClick={() => setPreviewData(null)}
+                onClick={() => {
+                  setPreviewData(null);
+                  setFullData(null);
+                }}
                 className="p-2 hover:bg-slate-100 rounded-lg text-slate-500"
               >
                 <X className="w-5 h-5" />
@@ -515,7 +523,10 @@ export default function ImportPage() {
               </div>
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => setPreviewData(null)}
+                  onClick={() => {
+                    setPreviewData(null);
+                    setFullData(null);
+                  }}
                   className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
                 >
                   取消

@@ -61,6 +61,7 @@ export interface MatchingRules {
   amountEnabled: boolean;
   amountTolerancePercent: number;
   currencyCheck: boolean;
+  feeTypeCheck: boolean;
 }
 
 export type TransportType = 'voyage' | 'port-fee' | 'bunker-fee';
