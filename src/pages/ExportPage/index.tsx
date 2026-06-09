@@ -12,6 +12,11 @@ import {
   FileWarning,
   Printer,
   Send,
+  X,
+  TrendingUp,
+  DollarSign,
+  XCircle,
+  ArrowRight,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useAppStore } from '../../store/useAppStore';
@@ -45,6 +50,68 @@ export default function ExportPage() {
   const discrepancyBills = carrierBills.filter((b) => b.status === 'discrepancy');
   const confirmedBills = carrierBills.filter((b) => b.status === 'confirmed');
   const pendingBills = carrierBills.filter((b) => b.status === 'pending');
+
+  const paymentExportData = (() => {
+    const bills = confirmedBills;
+    const totalAmount = bills.reduce((sum, b) => sum + b.totalAmount, 0);
+    
+    const currencyGroups = new Map<string, { count: number; amount: number }>();
+    bills.forEach((bill) => {
+      if (!currencyGroups.has(bill.currency)) {
+        currencyGroups.set(bill.currency, { count: 0, amount: 0 });
+      }
+      const group = currencyGroups.get(bill.currency)!;
+      group.count++;
+      group.amount += bill.totalAmount;
+    });
+
+    const excludedBills = carrierBills.filter((b) => b.status !== 'confirmed');
+    const excludedByStatus = new Map<string, number>();
+    excludedBills.forEach((b) => {
+      const label = b.status === 'matched' ? '已匹配待确认' : b.status === 'discrepancy' ? '有差异' : '待处理';
+      excludedByStatus.set(label, (excludedByStatus.get(label) || 0) + 1);
+    });
+
+    return {
+      count: bills.length,
+      totalAmount,
+      currencyGroups: Array.from(currencyGroups.entries()).map(([currency, data]) => ({
+        currency,
+        count: data.count,
+        amount: data.amount,
+      })),
+      excludedCount: excludedBills.length,
+      excludedByStatus: Array.from(excludedByStatus.entries()),
+      bills,
+    };
+  })();
+
+  const disputeExportData = (() => {
+    const discs = discrepancies.filter((d) => d.status !== 'resolved');
+    const totalAmount = discs.reduce((sum, d) => sum + d.diffAmount, 0);
+
+    const typeGroups = new Map<string, { count: number; amount: number }>();
+    discs.forEach((disc) => {
+      const label = disc.type === 'duplicate' ? '重复收费' : disc.type === 'missing' ? '漏收费用' : disc.type === 'amount-exceed' ? '金额超限' : '币种不一致';
+      if (!typeGroups.has(label)) {
+        typeGroups.set(label, { count: 0, amount: 0 });
+      }
+      const group = typeGroups.get(label)!;
+      group.count++;
+      group.amount += disc.diffAmount;
+    });
+
+    return {
+      count: discs.length,
+      totalAmount,
+      typeGroups: Array.from(typeGroups.entries()).map(([type, data]) => ({
+        type,
+        count: data.count,
+        amount: data.amount,
+      })),
+      discrepancies: discs,
+    };
+  })();
 
   const toggleSelectBill = (id: string) => {
     setSelectedBills((prev) =>
@@ -472,67 +539,258 @@ export default function ExportPage() {
         </div>
       </div>
 
-      {/* Export Modal */}
+      {/* Export Review Modal */}
       {showExportModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-200">
-              <h3 className="font-semibold text-slate-800">
-                {exportType === 'payment' ? '导出付款清单' : '导出争议清单'}
-              </h3>
-            </div>
-
-            <div className="p-6">
-              <div className="mb-6">
-                {exportType === 'payment' ? (
-                  <div className="text-center py-6">
-                    <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-4">
-                      <FileSpreadsheet className="w-8 h-8 text-emerald-600" />
-                    </div>
-                    <p className="text-slate-700 font-medium mb-1">付款清单</p>
-                    <p className="text-sm text-slate-500">
-                      将导出 {confirmedBills.length} 条已确认的账单记录
-                    </p>
-                  </div>
-                ) : (
-                  <div className="text-center py-6">
-                    <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
-                      <FileWarning className="w-8 h-8 text-amber-600" />
-                    </div>
-                    <p className="text-slate-700 font-medium mb-1">争议清单</p>
-                    <p className="text-sm text-slate-500">
-                      将导出 {discrepancies.filter((d) => d.status !== 'resolved').length} 条差异记录
-                    </p>
-                  </div>
-                )}
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="font-semibold text-slate-800 text-lg">
+                  {exportType === 'payment' ? '付款清单导出复核' : '争议清单导出复核'}
+                </h3>
+                <p className="text-sm text-slate-500 mt-0.5">请确认导出内容无误后再执行导出</p>
               </div>
-
-              <div className="space-y-3">
-                <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
-                  <Download className="w-5 h-5 text-slate-400" />
-                  <div className="flex-1">
-                    <p className="text-sm font-medium text-slate-700">Excel 格式</p>
-                    <p className="text-xs text-slate-400">.xlsx 文件，可直接用 Excel 打开</p>
-                  </div>
-                  <span className="text-xs text-emerald-600 font-medium">推荐</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="px-6 py-4 bg-slate-50 flex items-center justify-end gap-3">
               <button
                 onClick={() => setShowExportModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
+                className="p-2 hover:bg-slate-100 rounded-lg text-slate-500"
               >
-                取消
+                <X className="w-5 h-5" />
               </button>
-              <button
-                onClick={exportType === 'payment' ? handleExportPaymentList : handleExportDisputeList}
-                className="px-6 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 text-white text-sm font-medium rounded-lg hover:from-cyan-600 hover:to-blue-600 flex items-center gap-2"
-              >
-                <Download className="w-4 h-4" />
-                确认导出
-              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto p-6">
+              {exportType === 'payment' ? (
+                <div className="space-y-6">
+                  <div className="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-xl p-5 text-white">
+                    <div className="flex items-center gap-4">
+                      <div className="w-14 h-14 rounded-xl bg-white/20 flex items-center justify-center">
+                        <FileSpreadsheet className="w-7 h-7" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-white/80 text-sm">本次导出付款账单</p>
+                        <p className="text-2xl font-bold mt-1">
+                          {paymentExportData.count} 张账单
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-white/80 text-sm">合计金额</p>
+                        <p className="text-2xl font-bold mt-1">
+                          {paymentExportData.currencyGroups.length > 0
+                            ? `${paymentExportData.currencyGroups[0].currency} ${paymentExportData.currencyGroups[0].amount.toLocaleString()}`
+                            : '0'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {paymentExportData.currencyGroups.length > 1 && (
+                    <div className="bg-slate-50 rounded-xl p-4">
+                      <h4 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                        <DollarSign className="w-4 h-4" />
+                        币种分组统计
+                      </h4>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        {paymentExportData.currencyGroups.map((group) => (
+                          <div key={group.currency} className="bg-white rounded-lg p-3 border border-slate-200">
+                            <p className="text-xs text-slate-500">{group.currency}</p>
+                            <p className="text-lg font-bold text-slate-800 mt-1">
+                              {group.amount.toLocaleString()}
+                            </p>
+                            <p className="text-xs text-slate-400 mt-0.5">{group.count} 张账单</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {paymentExportData.excludedCount > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                      <h4 className="text-sm font-semibold text-amber-800 mb-3 flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4" />
+                        以下账单将被排除（{paymentExportData.excludedCount} 张）
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {paymentExportData.excludedByStatus.map(([status, count]) => (
+                          <span
+                            key={status}
+                            className="px-3 py-1.5 bg-white rounded-lg text-sm text-amber-700 border border-amber-200"
+                          >
+                            {status}：{count} 张
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                      <FileText className="w-4 h-4" />
+                      导出明细（{paymentExportData.count} 条）
+                    </h4>
+                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="max-h-60 overflow-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-50 sticky top-0">
+                            <tr>
+                              <th className="px-4 py-2.5 text-left font-medium text-slate-600">账单号</th>
+                              <th className="px-4 py-2.5 text-left font-medium text-slate-600">承运商</th>
+                              <th className="px-4 py-2.5 text-left font-medium text-slate-600">费用类型</th>
+                              <th className="px-4 py-2.5 text-right font-medium text-slate-600">金额</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {paymentExportData.bills.map((bill) => (
+                              <tr key={bill.id} className="hover:bg-slate-50">
+                                <td className="px-4 py-2.5 text-slate-700 font-medium">{bill.billNumber}</td>
+                                <td className="px-4 py-2.5 text-slate-600">{bill.carrierName}</td>
+                                <td className="px-4 py-2.5 text-slate-600">{bill.feeType}</td>
+                                <td className="px-4 py-2.5 text-right text-slate-800 font-medium">
+                                  {bill.currency} {bill.totalAmount.toLocaleString()}
+                                </td>
+                              </tr>
+                            ))}
+                            {paymentExportData.bills.length === 0 && (
+                              <tr>
+                                <td colSpan={4} className="px-4 py-8 text-center text-slate-400">
+                                  暂无已确认的账单
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  <div className="bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl p-5 text-white">
+                    <div className="flex items-center gap-4">
+                      <div className="w-14 h-14 rounded-xl bg-white/20 flex items-center justify-center">
+                        <FileWarning className="w-7 h-7" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-white/80 text-sm">本次导出争议记录</p>
+                        <p className="text-2xl font-bold mt-1">
+                          {disputeExportData.count} 条差异
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-white/80 text-sm">涉及金额</p>
+                        <p className="text-2xl font-bold mt-1">
+                          ¥{disputeExportData.totalAmount.toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 rounded-xl p-4">
+                    <h4 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4" />
+                      差异类型分布
+                    </h4>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {disputeExportData.typeGroups.map((group) => (
+                        <div key={group.type} className="bg-white rounded-lg p-3 border border-slate-200">
+                          <p className="text-xs text-slate-500">{group.type}</p>
+                          <p className="text-lg font-bold text-slate-800 mt-1">{group.count}</p>
+                          <p className="text-xs text-amber-600 mt-0.5">
+                            涉及 ¥{group.amount.toLocaleString()}
+                          </p>
+                        </div>
+                      ))}
+                      {disputeExportData.typeGroups.length === 0 && (
+                        <div className="col-span-4 text-center py-4 text-slate-400 text-sm">
+                          暂无差异记录
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                      <FileText className="w-4 h-4" />
+                      导出明细（{disputeExportData.count} 条）
+                    </h4>
+                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="max-h-60 overflow-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-50 sticky top-0">
+                            <tr>
+                              <th className="px-4 py-2.5 text-left font-medium text-slate-600">差异类型</th>
+                              <th className="px-4 py-2.5 text-left font-medium text-slate-600">描述</th>
+                              <th className="px-4 py-2.5 text-left font-medium text-slate-600">状态</th>
+                              <th className="px-4 py-2.5 text-right font-medium text-slate-600">差异金额</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {disputeExportData.discrepancies.map((disc) => (
+                              <tr key={disc.id} className="hover:bg-slate-50">
+                                <td className="px-4 py-2.5">
+                                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-700">
+                                    {disc.type === 'duplicate'
+                                      ? '重复收费'
+                                      : disc.type === 'missing'
+                                      ? '漏收费用'
+                                      : disc.type === 'amount-exceed'
+                                      ? '金额超限'
+                                      : '币种不一致'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-2.5 text-slate-600 max-w-xs truncate">{disc.description}</td>
+                                <td className="px-4 py-2.5 text-slate-600">
+                                  {disc.status === 'pending'
+                                    ? '待处理'
+                                    : disc.status === 'processing'
+                                    ? '处理中'
+                                    : disc.status === 'disputed'
+                                    ? '有争议'
+                                    : '已解决'}
+                                </td>
+                                <td className="px-4 py-2.5 text-right text-amber-600 font-medium">
+                                  {disc.diffAmount > 0 ? `+${disc.diffAmount.toLocaleString()}` : '-'}
+                                </td>
+                              </tr>
+                            ))}
+                            {disputeExportData.discrepancies.length === 0 && (
+                              <tr>
+                                <td colSpan={4} className="px-4 py-8 text-center text-slate-400">
+                                  暂无争议记录
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between flex-shrink-0">
+              <div className="text-sm text-slate-500">
+                <span className="text-emerald-600 font-medium">
+                  {exportType === 'payment' ? paymentExportData.count : disputeExportData.count}
+                </span>
+                条记录将被导出为 Excel 文件
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowExportModal(false)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={exportType === 'payment' ? handleExportPaymentList : handleExportDisputeList}
+                  disabled={exportType === 'payment' ? paymentExportData.count === 0 : disputeExportData.count === 0}
+                  className="px-6 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 text-white text-sm font-medium rounded-lg hover:from-cyan-600 hover:to-blue-600 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Download className="w-4 h-4" />
+                  确认导出
+                </button>
+              </div>
             </div>
           </div>
         </div>

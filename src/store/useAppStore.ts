@@ -370,18 +370,53 @@ export const useAppStore = create<AppState>()(
       },
 
       updateDiscrepancyComment: (id, comment) =>
-        set((state) => ({
-          discrepancies: state.discrepancies.map((d) =>
-            d.id === id ? { ...d, comment } : d
-          ),
-        })),
+        set((state) => {
+          const disc = state.discrepancies.find((d) => d.id === id);
+          return {
+            discrepancies: state.discrepancies.map((d) =>
+              d.id === id ? { ...d, comment } : d
+            ),
+          };
+        }),
 
       updateDiscrepancyStatus: (id, status) =>
-        set((state) => ({
-          discrepancies: state.discrepancies.map((d) =>
-            d.id === id ? { ...d, status: status as any } : d
-          ),
-        })),
+        set((state) => {
+          const disc = state.discrepancies.find((d) => d.id === id);
+          const oldStatus = disc?.status || '';
+          const newStatus = status as any;
+
+          let updatedBills = state.carrierBills;
+          if (disc && disc.matchingResultId) {
+            const result = state.matchingResults.find((r) => r.id === disc.matchingResultId);
+            if (result && result.carrierBillId) {
+              if (newStatus === 'resolved') {
+                const otherDiscsForBill = state.discrepancies.filter(
+                  (d) =>
+                    d.id !== id &&
+                    d.matchingResultId &&
+                    state.matchingResults.find((r) => r.id === d.matchingResultId)?.carrierBillId === result.carrierBillId &&
+                    d.status !== 'resolved'
+                );
+                if (otherDiscsForBill.length === 0) {
+                  updatedBills = state.carrierBills.map((b) =>
+                    b.id === result.carrierBillId ? { ...b, status: 'matched' as const } : b
+                  );
+                }
+              } else if (newStatus === 'disputed' || newStatus === 'processing') {
+                updatedBills = state.carrierBills.map((b) =>
+                  b.id === result.carrierBillId ? { ...b, status: 'discrepancy' as const } : b
+                );
+              }
+            }
+          }
+
+          return {
+            discrepancies: state.discrepancies.map((d) =>
+              d.id === id ? { ...d, status: newStatus } : d
+            ),
+            carrierBills: updatedBills,
+          };
+        }),
 
       confirmBills: (billIds) =>
         set((state) => {
@@ -477,15 +512,11 @@ export const useAppStore = create<AppState>()(
       splitMatchingResult: (resultId) => {
         set((state) => {
           const result = state.matchingResults.find((r) => r.id === resultId);
-          if (!result) return state;
+          if (!result || !result.carrierBillId) return state;
 
-          const split1: MatchingResult = {
-            ...result,
-            id: generateId(),
-            manualAdjusted: true,
-          };
+          const remainingResults = state.matchingResults.filter((r) => r.id !== resultId);
 
-          const split2: MatchingResult = {
+          const transportResult: MatchingResult = {
             ...result,
             id: generateId(),
             carrierBillId: '',
@@ -495,34 +526,43 @@ export const useAppStore = create<AppState>()(
             manualAdjusted: true,
           };
 
-          const remainingResults = state.matchingResults.filter((r) => r.id !== resultId);
+          const billResult: MatchingResult = {
+            ...result,
+            id: generateId(),
+            transportRecordId: '',
+            matchScore: 0,
+            status: 'pending',
+            discrepancies: [],
+            manualAdjusted: true,
+          };
+
+          const removedDiscIds = result.discrepancies.map((d) => d.id);
+          const remainingDiscs = state.discrepancies.filter(
+            (d) => !removedDiscIds.includes(d.id)
+          );
 
           const bill = state.carrierBills.find((b) => b.id === result.carrierBillId);
           let updatedBills = state.carrierBills;
           if (bill) {
             const otherMatches = remainingResults.filter(
-              (r) => r.carrierBillId === bill.id
+              (r) => r.carrierBillId === bill.id && r.id !== resultId
             );
             if (otherMatches.length === 0) {
+              const hasUnresolvedDisc = remainingDiscs.some(
+                (d) =>
+                  d.matchingResultId &&
+                  state.matchingResults.find((r) => r.id === d.matchingResultId)?.carrierBillId === bill.id &&
+                  d.status !== 'resolved'
+              );
               updatedBills = state.carrierBills.map((b) =>
-                b.id === bill.id ? { ...b, status: 'pending' as const } : b
+                b.id === bill.id ? { ...b, status: hasUnresolvedDisc ? 'discrepancy' as const : 'pending' as const } : b
               );
             }
           }
 
-          const remainingDiscs = state.discrepancies.filter(
-            (d) => !result.discrepancies.some((rd) => rd.id === d.id)
-          );
-
-          const split1Discs = split1.discrepancies.map((d) => ({
-            ...d,
-            matchingResultId: split1.id,
-          }));
-          split1.discrepancies = split1Discs;
-
           return {
-            matchingResults: [...remainingResults, split1, split2],
-            discrepancies: [...remainingDiscs, ...split1Discs],
+            matchingResults: [...remainingResults, transportResult, billResult],
+            discrepancies: remainingDiscs,
             carrierBills: updatedBills,
           };
         });
@@ -531,7 +571,7 @@ export const useAppStore = create<AppState>()(
           operationType: '拆分匹配',
           operator: '张财务',
           description: '拆分匹配结果',
-          detail: `拆分了匹配记录${resultId}`,
+          detail: `拆分了匹配记录${resultId}，原差异已移除，账单回到待处理`,
         });
       },
 
