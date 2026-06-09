@@ -13,6 +13,7 @@ import {
   User,
   ChevronLeft,
   ChevronRight,
+  Layers,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { cn } from '@/lib/utils';
@@ -30,14 +31,16 @@ const operationTypes = [
 ];
 
 export default function LogsPage() {
-  const { operationLogs } = useAppStore();
+  const { operationLogs, batches } = useAppStore();
   const [searchText, setSearchText] = useState('');
   const [filterType, setFilterType] = useState('all');
+  const [filterBatchId, setFilterBatchId] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
 
   const filteredLogs = operationLogs.filter((log) => {
     if (filterType !== 'all' && log.operationType !== filterType) return false;
+    if (filterBatchId !== 'all' && log.batchId !== filterBatchId) return false;
     if (searchText) {
       const lower = searchText.toLowerCase();
       if (
@@ -49,6 +52,11 @@ export default function LogsPage() {
     }
     return true;
   });
+
+  const getBatchName = (batchId: string) => {
+    const batch = batches.find((b) => b.id === batchId);
+    return batch?.name || '未知批次';
+  };
 
   const totalPages = Math.ceil(filteredLogs.length / pageSize);
   const paginatedLogs = filteredLogs.slice(
@@ -235,6 +243,26 @@ export default function LogsPage() {
             })}
           </div>
 
+          <div className="flex items-center gap-2">
+            <Layers className="w-4 h-4 text-slate-400" />
+            <span className="text-sm text-slate-600">批次：</span>
+            <select
+              value={filterBatchId}
+              onChange={(e) => {
+                setFilterBatchId(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500"
+            >
+              <option value="all">全部批次</option>
+              {batches.map((batch) => (
+                <option key={batch.id} value={batch.id}>
+                  {batch.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="flex-1 max-w-xs ml-auto">
             <div className="relative">
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -283,12 +311,16 @@ export default function LogsPage() {
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 mb-1">
+                      <div className="flex items-center gap-3 mb-1 flex-wrap">
                         <span className={cn('text-sm font-medium text-slate-800')}>
                           {log.description}
                         </span>
                         <span className={cn('px-2 py-0.5 text-xs font-medium rounded-full', colors.bg, colors.text)}>
                           {log.operationType}
+                        </span>
+                        <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-slate-100 text-slate-600 flex items-center gap-1">
+                          <Layers className="w-3 h-3" />
+                          {getBatchName(log.batchId)}
                         </span>
                       </div>
                       <p className="text-sm text-slate-500">{log.detail}</p>

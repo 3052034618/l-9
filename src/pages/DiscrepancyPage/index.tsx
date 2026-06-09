@@ -20,6 +20,8 @@ import {
   Building2,
   Layers,
   ArrowRight,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { DiscrepancyType, DiscrepancyStatus } from '../../types';
@@ -44,6 +46,7 @@ export default function DiscrepancyPage() {
     discrepancies,
     updateDiscrepancyComment,
     updateDiscrepancyStatus,
+    batchUpdateDiscrepancies,
     matchingResults,
     carrierBills,
     voyageDetails,
@@ -60,6 +63,9 @@ export default function DiscrepancyPage() {
   const [commentText, setCommentText] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'review'>('list');
   const [drilldownFilter, setDrilldownFilter] = useState<{ field: string; value: string } | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [batchCommentText, setBatchCommentText] = useState('');
+  const [showBatchComment, setShowBatchComment] = useState(false);
 
   const filteredDiscrepancies = discrepancies.filter((d) => {
     if (filterType !== 'all' && d.type !== filterType) return false;
@@ -241,6 +247,93 @@ export default function DiscrepancyPage() {
         detail: `差异${id}(${typeLabel})：${oldLabel} → ${newLabel}`,
       });
     }
+  };
+
+  const getDiscrepancyIdsByDimension = (field: string, value: string): string[] => {
+    return discrepancies
+      .filter((d) => {
+        if (d.status === 'resolved') return false;
+        if (field === 'carrier') {
+          return getDiscrepancyCarrier(d) === value;
+        }
+        if (field === 'feeType') {
+          return getDiscrepancyFeeType(d) === value;
+        }
+        if (field === 'type') {
+          return d.type === value;
+        }
+        return true;
+      })
+      .map((d) => d.id);
+  };
+
+  const handleToggleSelect = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleToggleSelectAll = (ids: string[]) => {
+    const allSelected = ids.length > 0 && ids.every((id) => selectedIds.includes(id));
+    if (allSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !ids.includes(id)));
+    } else {
+      setSelectedIds((prev) => [...new Set([...prev, ...ids])]);
+    }
+  };
+
+  const isAllSelected = (ids: string[]): boolean => {
+    return ids.length > 0 && ids.every((id) => selectedIds.includes(id));
+  };
+
+  const isPartialSelected = (ids: string[]): boolean => {
+    return ids.some((id) => selectedIds.includes(id)) && !isAllSelected(ids);
+  };
+
+  const handleBatchStatusChange = (status: DiscrepancyStatus) => {
+    if (selectedIds.length === 0) return;
+
+    batchUpdateDiscrepancies(selectedIds, { status });
+
+    const newLabel = getStatusInfo(status)?.label || '';
+    const operationType = status === 'disputed' ? '批量转争议' : '批量处理';
+    const description = status === 'disputed' ? '批量转争议处理' : '批量更新差异状态';
+
+    addOperationLog({
+      operationType,
+      operator: '张财务',
+      description,
+      detail: `共${selectedIds.length}条差异状态更新为：${newLabel}`,
+    });
+
+    setSelectedIds([]);
+  };
+
+  const handleBatchAddComment = () => {
+    if (selectedIds.length === 0 || !batchCommentText.trim()) return;
+
+    batchUpdateDiscrepancies(selectedIds, { comment: batchCommentText });
+
+    addOperationLog({
+      operationType: '批量处理',
+      operator: '张财务',
+      description: '批量添加处理意见',
+      detail: `共${selectedIds.length}条差异添加处理意见：${batchCommentText}`,
+    });
+
+    setBatchCommentText('');
+    setShowBatchComment(false);
+    setSelectedIds([]);
+  };
+
+  const handleBatchDispute = () => {
+    handleBatchStatusChange('disputed');
+  };
+
+  const clearSelection = () => {
+    setSelectedIds([]);
+    setShowBatchComment(false);
+    setBatchCommentText('');
   };
 
   const stats = {
@@ -666,18 +759,115 @@ export default function DiscrepancyPage() {
         <div className="space-y-6">
           {drilldownFilter ? (
             <div className="space-y-4">
+              <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-              <button
-                onClick={() => setDrilldownFilter(null)}
-                className="flex items-center gap-1 text-sm text-cyan-600 hover:text-cyan-700"
-              >
-                <ChevronDown className="w-4 h-4 -rotate-90" />
-                返回汇总视图
-              </button>
-              <span className="text-sm text-slate-500">
-                当前筛选：{drilldownFilter.field === 'carrier' ? '承运商' : drilldownFilter.field === 'feeType' ? '费用类型' : '差异类型'} = {drilldownFilter.value}
-              </span>
+                <button
+                  onClick={() => setDrilldownFilter(null)}
+                  className="flex items-center gap-1 text-sm text-cyan-600 hover:text-cyan-700"
+                >
+                  <ChevronDown className="w-4 h-4 -rotate-90" />
+                  返回汇总视图
+                </button>
+                <span className="text-sm text-slate-500">
+                  当前筛选：{drilldownFilter.field === 'carrier' ? '承运商' : drilldownFilter.field === 'feeType' ? '费用类型' : '差异类型'} = {drilldownFilter.value}
+                </span>
+              </div>
+              {drilldownDiscrepancies.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleToggleSelectAll(drilldownDiscrepancies.map((d) => d.id))}
+                    className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-slate-800 px-3 py-1.5 hover:bg-slate-100 rounded-lg transition-colors"
+                  >
+                    {isAllSelected(drilldownDiscrepancies.map((d) => d.id)) ? (
+                      <CheckSquare className="w-4 h-4 fill-cyan-600 text-white" />
+                    ) : (
+                      <Square className="w-4 h-4 text-slate-400" />
+                    )}
+                    {isAllSelected(drilldownDiscrepancies.map((d) => d.id)) ? '取消全选' : '全选'}
+                  </button>
+                </div>
+              )}
             </div>
+
+            {selectedIds.length > 0 && (
+              <div className="bg-gradient-to-r from-cyan-600 to-blue-700 rounded-xl p-4 text-white shadow-lg">
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div className="flex items-center gap-3">
+                    <CheckSquare className="w-5 h-5" />
+                    <span className="font-medium">已选择 {selectedIds.length} 条差异</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-1 bg-white/10 rounded-lg p-1">
+                      {statusOptions.map((status) => {
+                        if (status.value === 'disputed') return null;
+                        const SIcon = status.icon;
+                        return (
+                          <button
+                            key={status.value}
+                            onClick={() => handleBatchStatusChange(status.value as DiscrepancyStatus)}
+                            className="px-3 py-1.5 text-sm font-medium rounded-md hover:bg-white/20 transition-colors flex items-center gap-1.5"
+                          >
+                            <SIcon className="w-4 h-4" />
+                            {status.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <button
+                      onClick={handleBatchDispute}
+                      className="px-3 py-1.5 text-sm font-medium bg-red-500 hover:bg-red-600 rounded-lg transition-colors flex items-center gap-1.5"
+                    >
+                      <XCircle className="w-4 h-4" />
+                      转争议
+                    </button>
+                    <button
+                      onClick={() => setShowBatchComment(!showBatchComment)}
+                      className="px-3 py-1.5 text-sm font-medium bg-white/20 hover:bg-white/30 rounded-lg transition-colors flex items-center gap-1.5"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      添加意见
+                    </button>
+                    <button
+                      onClick={clearSelection}
+                      className="px-3 py-1.5 text-sm font-medium bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                    >
+                      取消选择
+                    </button>
+                  </div>
+                </div>
+                {showBatchComment && (
+                  <div className="mt-4 pt-4 border-t border-white/20">
+                    <div className="space-y-2">
+                      <textarea
+                        value={batchCommentText}
+                        onChange={(e) => setBatchCommentText(e.target.value)}
+                        placeholder="请输入批量处理意见..."
+                        className="w-full px-3 py-2 text-sm bg-white/10 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/50 text-white placeholder:text-white/50 resize-none"
+                        rows={2}
+                      />
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={() => {
+                            setShowBatchComment(false);
+                            setBatchCommentText('');
+                          }}
+                          className="px-3 py-1.5 text-sm text-white/70 hover:text-white transition-colors"
+                        >
+                          取消
+                        </button>
+                        <button
+                          onClick={handleBatchAddComment}
+                          disabled={!batchCommentText.trim()}
+                          className="px-4 py-1.5 text-sm bg-white text-cyan-700 font-medium rounded-lg hover:bg-white/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          确认添加
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {drilldownDiscrepancies.length === 0 ? (
               <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-12 text-center">
@@ -701,16 +891,33 @@ export default function DiscrepancyPage() {
                     : null;
                   const bill = matchingResult ? getBill(matchingResult.carrierBillId) : null;
 
+                  const isSelected = selectedIds.includes(disc.id);
                   return (
                     <div
                       key={disc.id}
-                      className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow"
+                      className={cn(
+                        'bg-white rounded-xl border shadow-sm overflow-hidden hover:shadow-md transition-shadow',
+                        isSelected ? 'border-cyan-400 ring-2 ring-cyan-500/20' : 'border-slate-100'
+                      )}
                     >
                       <div
                         className="p-4 cursor-pointer"
                         onClick={() => setExpandedId(isExpanded ? null : disc.id)}
                       >
                         <div className="flex items-center gap-4">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleSelect(disc.id);
+                            }}
+                            className="flex-shrink-0 text-cyan-600 hover:text-cyan-700 transition-colors"
+                          >
+                            {isSelected ? (
+                              <CheckSquare className="w-5 h-5 fill-cyan-600 text-white" />
+                            ) : (
+                              <Square className="w-5 h-5 text-slate-300" />
+                            )}
+                          </button>
                           <div
                             className={cn(
                               'w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0',
@@ -890,6 +1097,86 @@ export default function DiscrepancyPage() {
           </div>
         ) : (
           <div className="space-y-6">
+            {selectedIds.length > 0 && (
+              <div className="bg-gradient-to-r from-cyan-600 to-blue-700 rounded-xl p-4 text-white shadow-lg">
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div className="flex items-center gap-3">
+                    <CheckSquare className="w-5 h-5" />
+                    <span className="font-medium">已选择 {selectedIds.length} 条差异</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-1 bg-white/10 rounded-lg p-1">
+                      {statusOptions.map((status) => {
+                        if (status.value === 'disputed') return null;
+                        const SIcon = status.icon;
+                        return (
+                          <button
+                            key={status.value}
+                            onClick={() => handleBatchStatusChange(status.value as DiscrepancyStatus)}
+                            className="px-3 py-1.5 text-sm font-medium rounded-md hover:bg-white/20 transition-colors flex items-center gap-1.5"
+                          >
+                            <SIcon className="w-4 h-4" />
+                            {status.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <button
+                      onClick={handleBatchDispute}
+                      className="px-3 py-1.5 text-sm font-medium bg-red-500 hover:bg-red-600 rounded-lg transition-colors flex items-center gap-1.5"
+                    >
+                      <XCircle className="w-4 h-4" />
+                      转争议
+                    </button>
+                    <button
+                      onClick={() => setShowBatchComment(!showBatchComment)}
+                      className="px-3 py-1.5 text-sm font-medium bg-white/20 hover:bg-white/30 rounded-lg transition-colors flex items-center gap-1.5"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      添加意见
+                    </button>
+                    <button
+                      onClick={clearSelection}
+                      className="px-3 py-1.5 text-sm font-medium bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                    >
+                      取消选择
+                    </button>
+                  </div>
+                </div>
+                {showBatchComment && (
+                  <div className="mt-4 pt-4 border-t border-white/20">
+                    <div className="space-y-2">
+                      <textarea
+                        value={batchCommentText}
+                        onChange={(e) => setBatchCommentText(e.target.value)}
+                        placeholder="请输入批量处理意见..."
+                        className="w-full px-3 py-2 text-sm bg-white/10 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/50 text-white placeholder:text-white/50 resize-none"
+                        rows={2}
+                      />
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={() => {
+                            setShowBatchComment(false);
+                            setBatchCommentText('');
+                          }}
+                          className="px-3 py-1.5 text-sm text-white/70 hover:text-white transition-colors"
+                        >
+                          取消
+                        </button>
+                        <button
+                          onClick={handleBatchAddComment}
+                          disabled={!batchCommentText.trim()}
+                          className="px-4 py-1.5 text-sm bg-white text-cyan-700 font-medium rounded-lg hover:bg-white/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          确认添加
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="bg-gradient-to-r from-cyan-500 to-blue-600 rounded-2xl p-6 text-white">
               <div className="flex items-center gap-4">
                 <div className="w-14 h-14 rounded-xl bg-white/20 flex items-center justify-center">
@@ -913,24 +1200,51 @@ export default function DiscrepancyPage() {
                   {reviewData.carriers.length === 0 ? (
                     <div className="p-6 text-center text-slate-400 text-sm">暂无数据</div>
                   ) : (
-                    reviewData.carriers.map((carrier) => (
-                      <button
-                        key={carrier.name}
-                        onClick={() => setDrilldownFilter({ field: 'carrier', value: carrier.name })}
-                        className="w-full px-5 py-4 text-left hover:bg-slate-50 transition-colors flex items-center justify-between group"
-                      >
-                        <div>
-                          <p className="font-medium text-slate-800">{carrier.name}</p>
-                          <p className="text-xs text-slate-500 mt-0.5">{carrier.count} 条差异</p>
+                    reviewData.carriers.map((carrier) => {
+                      const ids = getDiscrepancyIdsByDimension('carrier', carrier.name);
+                      const allSelected = isAllSelected(ids);
+                      const partial = isPartialSelected(ids);
+                      return (
+                        <div
+                          key={carrier.name}
+                          className={cn(
+                            'px-5 py-4 hover:bg-slate-50 transition-colors flex items-center gap-3',
+                            (allSelected || partial) ? 'bg-cyan-50/50' : ''
+                          )}
+                        >
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleSelectAll(ids);
+                            }}
+                            className="flex-shrink-0 text-cyan-600 hover:text-cyan-700 transition-colors"
+                          >
+                            {allSelected ? (
+                              <CheckSquare className="w-5 h-5 fill-cyan-600 text-white" />
+                            ) : partial ? (
+                              <CheckSquare className="w-5 h-5 fill-cyan-400 text-white" />
+                            ) : (
+                              <Square className="w-5 h-5 text-slate-300" />
+                            )}
+                          </button>
+                          <button
+                            onClick={() => setDrilldownFilter({ field: 'carrier', value: carrier.name })}
+                            className="flex-1 text-left flex items-center justify-between group"
+                          >
+                            <div>
+                              <p className="font-medium text-slate-800">{carrier.name}</p>
+                              <p className="text-xs text-slate-500 mt-0.5">{carrier.count} 条差异</p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="text-right">
+                                <p className="font-bold text-red-500">+{carrier.amount.toLocaleString()}</p>
+                              </div>
+                              <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-cyan-500 transition-colors" />
+                            </div>
+                          </button>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <div className="text-right">
-                            <p className="font-bold text-red-500">+{carrier.amount.toLocaleString()}</p>
-                          </div>
-                          <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-cyan-500 transition-colors" />
-                        </div>
-                      </button>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -944,24 +1258,51 @@ export default function DiscrepancyPage() {
                   {reviewData.feeTypes.length === 0 ? (
                     <div className="p-6 text-center text-slate-400 text-sm">暂无数据</div>
                   ) : (
-                    reviewData.feeTypes.map((feeType) => (
-                      <button
-                        key={feeType.name}
-                        onClick={() => setDrilldownFilter({ field: 'feeType', value: feeType.name })}
-                        className="w-full px-5 py-4 text-left hover:bg-slate-50 transition-colors flex items-center justify-between group"
-                      >
-                        <div>
-                          <p className="font-medium text-slate-800">{feeType.name}</p>
-                          <p className="text-xs text-slate-500 mt-0.5">{feeType.count} 条差异</p>
+                    reviewData.feeTypes.map((feeType) => {
+                      const ids = getDiscrepancyIdsByDimension('feeType', feeType.name);
+                      const allSelected = isAllSelected(ids);
+                      const partial = isPartialSelected(ids);
+                      return (
+                        <div
+                          key={feeType.name}
+                          className={cn(
+                            'px-5 py-4 hover:bg-slate-50 transition-colors flex items-center gap-3',
+                            (allSelected || partial) ? 'bg-cyan-50/50' : ''
+                          )}
+                        >
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleSelectAll(ids);
+                            }}
+                            className="flex-shrink-0 text-cyan-600 hover:text-cyan-700 transition-colors"
+                          >
+                            {allSelected ? (
+                              <CheckSquare className="w-5 h-5 fill-cyan-600 text-white" />
+                            ) : partial ? (
+                              <CheckSquare className="w-5 h-5 fill-cyan-400 text-white" />
+                            ) : (
+                              <Square className="w-5 h-5 text-slate-300" />
+                            )}
+                          </button>
+                          <button
+                            onClick={() => setDrilldownFilter({ field: 'feeType', value: feeType.name })}
+                            className="flex-1 text-left flex items-center justify-between group"
+                          >
+                            <div>
+                              <p className="font-medium text-slate-800">{feeType.name}</p>
+                              <p className="text-xs text-slate-500 mt-0.5">{feeType.count} 条差异</p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="text-right">
+                                <p className="font-bold text-red-500">+{feeType.amount.toLocaleString()}</p>
+                              </div>
+                              <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-cyan-500 transition-colors" />
+                            </div>
+                          </button>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <div className="text-right">
-                            <p className="font-bold text-red-500">+{feeType.amount.toLocaleString()}</p>
-                          </div>
-                          <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-cyan-500 transition-colors" />
-                        </div>
-                      </button>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -977,32 +1318,57 @@ export default function DiscrepancyPage() {
                   ) : (
                     reviewData.types.map((type) => {
                       const colors = colorClasses[type.color as keyof typeof colorClasses];
+                      const ids = getDiscrepancyIdsByDimension('type', type.type);
+                      const allSelected = isAllSelected(ids);
+                      const partial = isPartialSelected(ids);
                       return (
-                        <button
+                        <div
                           key={type.type}
-                          onClick={() => setDrilldownFilter({ field: 'type', value: type.type })}
-                          className="w-full px-5 py-4 text-left hover:bg-slate-50 transition-colors flex items-center justify-between group"
+                          className={cn(
+                            'px-5 py-4 hover:bg-slate-50 transition-colors flex items-center gap-3',
+                            (allSelected || partial) ? 'bg-cyan-50/50' : ''
+                          )}
                         >
-                          <div className="flex items-center gap-3">
-                            <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center', colors.icon)}>
-                              {(() => {
-                                const t = discrepancyTypes.find((dt) => dt.type === type.type);
-                                const Icon = t?.icon || AlertTriangle;
-                                return <Icon className="w-4 h-4 text-white" />;
-                              })()}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleSelectAll(ids);
+                            }}
+                            className="flex-shrink-0 text-cyan-600 hover:text-cyan-700 transition-colors"
+                          >
+                            {allSelected ? (
+                              <CheckSquare className="w-5 h-5 fill-cyan-600 text-white" />
+                            ) : partial ? (
+                              <CheckSquare className="w-5 h-5 fill-cyan-400 text-white" />
+                            ) : (
+                              <Square className="w-5 h-5 text-slate-300" />
+                            )}
+                          </button>
+                          <button
+                            onClick={() => setDrilldownFilter({ field: 'type', value: type.type })}
+                            className="flex-1 text-left flex items-center justify-between group"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center', colors.icon)}>
+                                {(() => {
+                                  const t = discrepancyTypes.find((dt) => dt.type === type.type);
+                                  const Icon = t?.icon || AlertTriangle;
+                                  return <Icon className="w-4 h-4 text-white" />;
+                                })()}
+                              </div>
+                              <div>
+                                <p className="font-medium text-slate-800">{type.label}</p>
+                                <p className="text-xs text-slate-500 mt-0.5">{type.count} 条差异</p>
+                              </div>
                             </div>
-                            <div>
-                              <p className="font-medium text-slate-800">{type.label}</p>
-                              <p className="text-xs text-slate-500 mt-0.5">{type.count} 条差异</p>
+                            <div className="flex items-center gap-3">
+                              <div className="text-right">
+                                <p className="font-bold text-red-500">+{type.amount.toLocaleString()}</p>
+                              </div>
+                              <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-cyan-500 transition-colors" />
                             </div>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <div className="text-right">
-                              <p className="font-bold text-red-500">+{type.amount.toLocaleString()}</p>
-                            </div>
-                            <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-cyan-500 transition-colors" />
-                          </div>
-                        </button>
+                          </button>
+                        </div>
                       );
                     })
                   )}

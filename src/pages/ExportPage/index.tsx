@@ -1,13 +1,15 @@
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   CheckSquare,
   Download,
   FileText,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   Search,
   Filter,
   ChevronDown,
+  ChevronRight,
   FileSpreadsheet,
   FileWarning,
   Printer,
@@ -17,6 +19,7 @@ import {
   DollarSign,
   XCircle,
   ArrowRight,
+  Building2,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useAppStore } from '../../store/useAppStore';
@@ -31,6 +34,11 @@ export default function ExportPage() {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportType, setExportType] = useState<'payment' | 'dispute'>('payment');
+
+  const [modalSelectedBills, setModalSelectedBills] = useState<string[]>([]);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [excludedExpanded, setExcludedExpanded] = useState(false);
+  const [disputeStatusFilter, setDisputeStatusFilter] = useState<string[]>(['pending', 'processing', 'disputed']);
 
   const filteredBills = carrierBills.filter((bill) => {
     if (filterStatus !== 'all' && bill.status !== filterStatus) return false;
@@ -51,43 +59,95 @@ export default function ExportPage() {
   const confirmedBills = carrierBills.filter((b) => b.status === 'confirmed');
   const pendingBills = carrierBills.filter((b) => b.status === 'pending');
 
-  const paymentExportData = (() => {
-    const bills = confirmedBills;
-    const totalAmount = bills.reduce((sum, b) => sum + b.totalAmount, 0);
+  const paymentReviewData = useMemo(() => {
+    const matchedBillsList = carrierBills.filter((b) => b.status === 'matched');
+    const selectedMatchedBills = matchedBillsList.filter((b) => modalSelectedBills.includes(b.id));
     
-    const currencyGroups = new Map<string, { count: number; amount: number }>();
-    bills.forEach((bill) => {
-      if (!currencyGroups.has(bill.currency)) {
-        currencyGroups.set(bill.currency, { count: 0, amount: 0 });
+    const totalAmount = selectedMatchedBills.reduce((sum, b) => sum + b.totalAmount, 0);
+
+    const carrierCurrencyGroups = new Map<string, { 
+      carrierName: string; 
+      currency: string; 
+      count: number; 
+      amount: number;
+      bills: typeof matchedBillsList;
+    }>();
+    
+    matchedBillsList.forEach((bill) => {
+      const key = `${bill.carrierName}_${bill.currency}`;
+      if (!carrierCurrencyGroups.has(key)) {
+        carrierCurrencyGroups.set(key, {
+          carrierName: bill.carrierName,
+          currency: bill.currency,
+          count: 0,
+          amount: 0,
+          bills: [],
+        });
       }
-      const group = currencyGroups.get(bill.currency)!;
+      const group = carrierCurrencyGroups.get(key)!;
       group.count++;
       group.amount += bill.totalAmount;
+      group.bills.push(bill);
     });
 
-    const excludedBills = carrierBills.filter((b) => b.status !== 'confirmed');
-    const excludedByStatus = new Map<string, number>();
+    const excludedBills = carrierBills.filter((b) => b.status !== 'matched');
+    const excludedByStatus = new Map<string, { count: number; bills: typeof excludedBills }>();
     excludedBills.forEach((b) => {
-      const label = b.status === 'matched' ? '已匹配待确认' : b.status === 'discrepancy' ? '有差异' : '待处理';
-      excludedByStatus.set(label, (excludedByStatus.get(label) || 0) + 1);
+      let label = '';
+      let reason = '';
+      switch (b.status) {
+        case 'confirmed':
+          label = '已确认';
+          reason = '账单已确认导出';
+          break;
+        case 'discrepancy':
+          label = '有差异';
+          reason = '存在待处理的差异项';
+          break;
+        default:
+          label = '待处理';
+          reason = '尚未完成匹配核对';
+      }
+      if (!excludedByStatus.has(label)) {
+        excludedByStatus.set(label, { count: 0, bills: [] });
+      }
+      const group = excludedByStatus.get(label)!;
+      group.count++;
+      group.bills.push({ ...b, excludedReason: reason } as any);
     });
+
+    const groups = Array.from(carrierCurrencyGroups.entries()).map(([key, data]) => ({
+      key,
+      carrierName: data.carrierName,
+      currency: data.currency,
+      count: data.count,
+      amount: data.amount,
+      bills: data.bills,
+    }));
+
+    const allMatchedIds = matchedBillsList.map((b) => b.id);
+    const selectedCount = selectedMatchedBills.length;
+    const selectedAmount = selectedMatchedBills.reduce((sum, b) => sum + b.totalAmount, 0);
 
     return {
-      count: bills.length,
+      totalMatchedCount: matchedBillsList.length,
+      selectedCount,
+      selectedAmount,
       totalAmount,
-      currencyGroups: Array.from(currencyGroups.entries()).map(([currency, data]) => ({
-        currency,
-        count: data.count,
-        amount: data.amount,
-      })),
+      groups,
+      allMatchedIds,
       excludedCount: excludedBills.length,
-      excludedByStatus: Array.from(excludedByStatus.entries()),
-      bills,
+      excludedByStatus: Array.from(excludedByStatus.entries()).map(([status, data]) => ({
+        status,
+        count: data.count,
+        bills: data.bills,
+      })),
+      selectedBills: selectedMatchedBills,
     };
-  })();
+  }, [carrierBills, modalSelectedBills]);
 
-  const disputeExportData = (() => {
-    const discs = discrepancies.filter((d) => d.status !== 'resolved');
+  const disputeExportData = useMemo(() => {
+    const discs = discrepancies.filter((d) => disputeStatusFilter.includes(d.status));
     const totalAmount = discs.reduce((sum, d) => sum + d.diffAmount, 0);
 
     const typeGroups = new Map<string, { count: number; amount: number }>();
@@ -111,7 +171,7 @@ export default function ExportPage() {
       })),
       discrepancies: discs,
     };
-  })();
+  }, [discrepancies, disputeStatusFilter]);
 
   const toggleSelectBill = (id: string) => {
     setSelectedBills((prev) =>
@@ -126,6 +186,66 @@ export default function ExportPage() {
 
   const clearSelection = () => {
     setSelectedBills([]);
+  };
+
+  useEffect(() => {
+    if (showExportModal && exportType === 'payment') {
+      setModalSelectedBills(paymentReviewData.allMatchedIds);
+      setExpandedGroups(new Set(paymentReviewData.groups.map((g) => g.key)));
+      setExcludedExpanded(false);
+    }
+  }, [showExportModal, exportType]);
+
+  const toggleGroupExpand = (key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const toggleModalSelectBill = (id: string) => {
+    setModalSelectedBills((prev) =>
+      prev.includes(id) ? prev.filter((b) => b !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectGroup = (groupKey: string) => {
+    const group = paymentReviewData.groups.find((g) => g.key === groupKey);
+    if (!group) return;
+
+    const groupIds = group.bills.map((b) => b.id);
+    const allSelected = groupIds.every((id) => modalSelectedBills.includes(id));
+
+    setModalSelectedBills((prev) => {
+      if (allSelected) {
+        return prev.filter((id) => !groupIds.includes(id));
+      } else {
+        const next = new Set(prev);
+        groupIds.forEach((id) => next.add(id));
+        return Array.from(next);
+      }
+    });
+  };
+
+  const toggleSelectAllMatched = () => {
+    if (paymentReviewData.selectedCount === paymentReviewData.totalMatchedCount) {
+      setModalSelectedBills([]);
+    } else {
+      setModalSelectedBills(paymentReviewData.allMatchedIds);
+    }
+  };
+
+  const expandAllGroups = () => {
+    setExpandedGroups(new Set(paymentReviewData.groups.map((g) => g.key)));
+  };
+
+  const collapseAllGroups = () => {
+    setExpandedGroups(new Set());
   };
 
   const handleBatchConfirm = () => {
@@ -160,8 +280,16 @@ export default function ExportPage() {
   };
 
   const handleExportPaymentList = () => {
-    const confirmed = carrierBills.filter((b) => b.status === 'confirmed');
-    const exportData = confirmed.map((bill) => ({
+    const billsToExport = paymentReviewData.selectedBills;
+    if (billsToExport.length === 0) {
+      alert('请至少选择一张账单');
+      return;
+    }
+
+    const billIds = billsToExport.map((b) => b.id);
+    confirmBills(billIds);
+
+    const exportData = billsToExport.map((bill) => ({
       账单号: bill.billNumber,
       承运商: bill.carrierName,
       船名: bill.vesselName,
@@ -179,19 +307,20 @@ export default function ExportPage() {
     XLSX.utils.book_append_sheet(wb, ws, '付款清单');
     XLSX.writeFile(wb, `付款清单_${new Date().toISOString().split('T')[0]}.xlsx`);
 
+    const totalAmount = billsToExport.reduce((sum, b) => sum + b.totalAmount, 0);
     addOperationLog({
       operationType: '导出',
       operator: '张财务',
       description: '导出付款清单',
-      detail: `导出${confirmed.length}条付款记录`,
+      detail: `导出${billsToExport.length}条付款记录，合计金额${totalAmount.toLocaleString()}`,
     });
 
     setShowExportModal(false);
   };
 
   const handleExportDisputeList = () => {
-    const disputedDiscs = discrepancies.filter((d) => d.status === 'disputed' || d.status === 'pending');
-    const exportData = disputedDiscs.map((disc) => {
+    const discs = disputeExportData.discrepancies;
+    const exportData = discs.map((disc) => {
       const result = matchingResults.find((r) => r.id === disc.matchingResultId);
       const bill = result ? carrierBills.find((b) => b.id === result.carrierBillId) : null;
 
@@ -226,11 +355,19 @@ export default function ExportPage() {
     XLSX.utils.book_append_sheet(wb, ws, '争议清单');
     XLSX.writeFile(wb, `争议清单_${new Date().toISOString().split('T')[0]}.xlsx`);
 
+    const statusLabels: Record<string, string> = {
+      pending: '待处理',
+      processing: '处理中',
+      disputed: '有争议',
+      resolved: '已解决',
+    };
+    const statusRange = disputeStatusFilter.map((s) => statusLabels[s]).join('、');
+
     addOperationLog({
       operationType: '导出',
       operator: '张财务',
       description: '导出争议清单',
-      detail: `导出${disputedDiscs.length}条争议记录`,
+      detail: `状态范围：${statusRange}，导出${discs.length}条争议记录，涉及金额¥${disputeExportData.totalAmount.toLocaleString()}`,
     });
 
     setShowExportModal(false);
@@ -560,110 +697,285 @@ export default function ExportPage() {
 
             <div className="flex-1 overflow-auto p-6">
               {exportType === 'payment' ? (
-                <div className="space-y-6">
-                  <div className="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-xl p-5 text-white">
+                <div className="space-y-5">
+                  <div className="bg-gradient-to-r from-slate-700 to-blue-800 rounded-xl p-5 text-white">
                     <div className="flex items-center gap-4">
                       <div className="w-14 h-14 rounded-xl bg-white/20 flex items-center justify-center">
                         <FileSpreadsheet className="w-7 h-7" />
                       </div>
                       <div className="flex-1">
-                        <p className="text-white/80 text-sm">本次导出付款账单</p>
+                        <p className="text-white/80 text-sm">本次将导出付款账单</p>
                         <p className="text-2xl font-bold mt-1">
-                          {paymentExportData.count} 张账单
+                          {paymentReviewData.selectedCount} / {paymentReviewData.totalMatchedCount} 张
                         </p>
                       </div>
                       <div className="text-right">
                         <p className="text-white/80 text-sm">合计金额</p>
                         <p className="text-2xl font-bold mt-1">
-                          {paymentExportData.currencyGroups.length > 0
-                            ? `${paymentExportData.currencyGroups[0].currency} ${paymentExportData.currencyGroups[0].amount.toLocaleString()}`
+                          {paymentReviewData.groups.length > 0
+                            ? `${paymentReviewData.groups[0].currency} ${paymentReviewData.selectedAmount.toLocaleString()}`
                             : '0'}
                         </p>
                       </div>
                     </div>
                   </div>
 
-                  {paymentExportData.currencyGroups.length > 1 && (
-                    <div className="bg-slate-50 rounded-xl p-4">
-                      <h4 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                        <DollarSign className="w-4 h-4" />
-                        币种分组统计
+                  <div className="bg-slate-50 rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                        <CheckSquare className="w-4 h-4" />
+                        账单列表
                       </h4>
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                        {paymentExportData.currencyGroups.map((group) => (
-                          <div key={group.currency} className="bg-white rounded-lg p-3 border border-slate-200">
-                            <p className="text-xs text-slate-500">{group.currency}</p>
-                            <p className="text-lg font-bold text-slate-800 mt-1">
-                              {group.amount.toLocaleString()}
-                            </p>
-                            <p className="text-xs text-slate-400 mt-0.5">{group.count} 张账单</p>
-                          </div>
-                        ))}
+                      <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={paymentReviewData.selectedCount === paymentReviewData.totalMatchedCount && paymentReviewData.totalMatchedCount > 0}
+                            onChange={toggleSelectAllMatched}
+                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-slate-600">全选</span>
+                        </label>
+                        <div className="w-px h-4 bg-slate-300" />
+                        <button
+                          onClick={expandAllGroups}
+                          className="text-sm text-blue-600 hover:text-blue-700"
+                        >
+                          全部展开
+                        </button>
+                        <button
+                          onClick={collapseAllGroups}
+                          className="text-sm text-slate-500 hover:text-slate-600"
+                        >
+                          全部收起
+                        </button>
                       </div>
                     </div>
-                  )}
 
-                  {paymentExportData.excludedCount > 0 && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-                      <h4 className="text-sm font-semibold text-amber-800 mb-3 flex items-center gap-2">
-                        <AlertCircle className="w-4 h-4" />
-                        以下账单将被排除（{paymentExportData.excludedCount} 张）
-                      </h4>
-                      <div className="flex flex-wrap gap-2">
-                        {paymentExportData.excludedByStatus.map(([status, count]) => (
-                          <span
-                            key={status}
-                            className="px-3 py-1.5 bg-white rounded-lg text-sm text-amber-700 border border-amber-200"
+                    <div className="space-y-3">
+                      {paymentReviewData.groups.map((group) => {
+                        const isExpanded = expandedGroups.has(group.key);
+                        const groupIds = group.bills.map((b) => b.id);
+                        const allSelected = groupIds.every((id) => modalSelectedBills.includes(id));
+                        const someSelected = groupIds.some((id) => modalSelectedBills.includes(id));
+
+                        return (
+                          <div
+                            key={group.key}
+                            className="bg-white border border-slate-200 rounded-lg overflow-hidden"
                           >
-                            {status}：{count} 张
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                            <div
+                              className="px-4 py-3 bg-gradient-to-r from-slate-50 to-blue-50 flex items-center gap-3 cursor-pointer hover:from-slate-100 hover:to-blue-100 transition-colors"
+                              onClick={() => toggleGroupExpand(group.key)}
+                            >
+                              <div className="flex items-center justify-center w-6 h-6">
+                                {isExpanded ? (
+                                  <ChevronDown className="w-4 h-4 text-slate-500" />
+                                ) : (
+                                  <ChevronRight className="w-4 h-4 text-slate-500" />
+                                )}
+                              </div>
+                              <input
+                                type="checkbox"
+                                checked={allSelected}
+                                ref={(el) => {
+                                  if (el) el.indeterminate = someSelected && !allSelected;
+                                }}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  toggleSelectGroup(group.key);
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                              />
+                              <div className="flex items-center gap-2 flex-1">
+                                <Building2 className="w-4 h-4 text-blue-600" />
+                                <span className="font-medium text-slate-800">{group.carrierName}</span>
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-medium">
+                                  {group.currency}
+                                </span>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm font-semibold text-slate-800">
+                                  {group.currency} {group.amount.toLocaleString()}
+                                </p>
+                                <p className="text-xs text-slate-500">{group.count} 张账单</p>
+                              </div>
+                            </div>
 
-                  <div>
-                    <h4 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                      <FileText className="w-4 h-4" />
-                      导出明细（{paymentExportData.count} 条）
-                    </h4>
-                    <div className="border border-slate-200 rounded-xl overflow-hidden">
-                      <div className="max-h-60 overflow-auto">
-                        <table className="w-full text-sm">
-                          <thead className="bg-slate-50 sticky top-0">
-                            <tr>
-                              <th className="px-4 py-2.5 text-left font-medium text-slate-600">账单号</th>
-                              <th className="px-4 py-2.5 text-left font-medium text-slate-600">承运商</th>
-                              <th className="px-4 py-2.5 text-left font-medium text-slate-600">费用类型</th>
-                              <th className="px-4 py-2.5 text-right font-medium text-slate-600">金额</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {paymentExportData.bills.map((bill) => (
-                              <tr key={bill.id} className="hover:bg-slate-50">
-                                <td className="px-4 py-2.5 text-slate-700 font-medium">{bill.billNumber}</td>
-                                <td className="px-4 py-2.5 text-slate-600">{bill.carrierName}</td>
-                                <td className="px-4 py-2.5 text-slate-600">{bill.feeType}</td>
-                                <td className="px-4 py-2.5 text-right text-slate-800 font-medium">
-                                  {bill.currency} {bill.totalAmount.toLocaleString()}
-                                </td>
-                              </tr>
-                            ))}
-                            {paymentExportData.bills.length === 0 && (
-                              <tr>
-                                <td colSpan={4} className="px-4 py-8 text-center text-slate-400">
-                                  暂无已确认的账单
-                                </td>
-                              </tr>
+                            {isExpanded && (
+                              <div className="border-t border-slate-200">
+                                <table className="w-full text-sm">
+                                  <thead className="bg-slate-50">
+                                    <tr>
+                                      <th className="px-4 py-2 text-left font-medium text-slate-600 w-10"></th>
+                                      <th className="px-3 py-2 text-left font-medium text-slate-600">账单号</th>
+                                      <th className="px-3 py-2 text-left font-medium text-slate-600">船名/航次</th>
+                                      <th className="px-3 py-2 text-left font-medium text-slate-600">费用类型</th>
+                                      <th className="px-4 py-2 text-right font-medium text-slate-600">金额</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {group.bills.map((bill) => (
+                                      <tr
+                                        key={bill.id}
+                                        className={cn(
+                                          'hover:bg-blue-50/50 transition-colors',
+                                          modalSelectedBills.includes(bill.id) && 'bg-blue-50/30'
+                                        )}
+                                      >
+                                        <td className="px-4 py-2.5">
+                                          <input
+                                            type="checkbox"
+                                            checked={modalSelectedBills.includes(bill.id)}
+                                            onChange={() => toggleModalSelectBill(bill.id)}
+                                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                          />
+                                        </td>
+                                        <td className="px-3 py-2.5 font-medium text-slate-800">{bill.billNumber}</td>
+                                        <td className="px-3 py-2.5 text-slate-600">
+                                          {bill.vesselName} / {bill.voyageNumber}
+                                        </td>
+                                        <td className="px-3 py-2.5 text-slate-600">{bill.feeType}</td>
+                                        <td className="px-4 py-2.5 text-right font-semibold text-slate-800">
+                                          {bill.currency} {bill.totalAmount.toLocaleString()}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
                             )}
-                          </tbody>
-                        </table>
-                      </div>
+                          </div>
+                        );
+                      })}
+
+                      {paymentReviewData.groups.length === 0 && (
+                        <div className="bg-white border border-slate-200 rounded-lg p-8 text-center">
+                          <FileText className="w-10 h-10 mx-auto mb-2 text-slate-300" />
+                          <p className="text-sm text-slate-400">暂无已匹配的账单</p>
+                        </div>
+                      )}
                     </div>
                   </div>
+
+                  {paymentReviewData.excludedCount > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl overflow-hidden">
+                      <div
+                        className="px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-amber-100/50 transition-colors"
+                        onClick={() => setExcludedExpanded(!excludedExpanded)}
+                      >
+                        <div className="flex items-center gap-2">
+                          {excludedExpanded ? (
+                            <ChevronDown className="w-4 h-4 text-amber-600" />
+                          ) : (
+                            <ChevronRight className="w-4 h-4 text-amber-600" />
+                          )}
+                          <AlertCircle className="w-4 h-4 text-amber-600" />
+                          <span className="text-sm font-semibold text-amber-800">
+                            以下账单将被排除（{paymentReviewData.excludedCount} 张）
+                          </span>
+                        </div>
+                        <span className="text-xs text-amber-600">
+                          {excludedExpanded ? '收起' : '展开查看详情'}
+                        </span>
+                      </div>
+
+                      {excludedExpanded && (
+                        <div className="border-t border-amber-200">
+                          {paymentReviewData.excludedByStatus.map((statusGroup) => (
+                            <div key={statusGroup.status} className="border-b border-amber-200 last:border-b-0">
+                              <div className="px-4 py-2 bg-amber-100/50">
+                                <span className="text-sm font-medium text-amber-700">
+                                  {statusGroup.status}（{statusGroup.count} 张）
+                                </span>
+                              </div>
+                              <div className="max-h-48 overflow-auto">
+                                <table className="w-full text-sm">
+                                  <thead className="bg-amber-50/80 sticky top-0">
+                                    <tr>
+                                      <th className="px-4 py-2 text-left font-medium text-amber-700 text-xs">账单号</th>
+                                      <th className="px-3 py-2 text-left font-medium text-amber-700 text-xs">承运商</th>
+                                      <th className="px-3 py-2 text-right font-medium text-amber-700 text-xs">金额</th>
+                                      <th className="px-4 py-2 text-left font-medium text-amber-700 text-xs">排除原因</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-amber-100">
+                                    {statusGroup.bills.map((bill: any) => (
+                                      <tr key={bill.id} className="hover:bg-amber-50/50">
+                                        <td className="px-4 py-2 text-slate-700 font-medium">{bill.billNumber}</td>
+                                        <td className="px-3 py-2 text-slate-600">{bill.carrierName}</td>
+                                        <td className="px-3 py-2 text-right text-slate-700">
+                                          {bill.currency} {bill.totalAmount.toLocaleString()}
+                                        </td>
+                                        <td className="px-4 py-2 text-amber-600 text-xs">{bill.excludedReason}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {!excludedExpanded && (
+                        <div className="px-4 pb-3 flex flex-wrap gap-2">
+                          {paymentReviewData.excludedByStatus.map((statusGroup) => (
+                            <span
+                              key={statusGroup.status}
+                              className="px-3 py-1 bg-white rounded-lg text-sm text-amber-700 border border-amber-200"
+                            >
+                              {statusGroup.status}：{statusGroup.count} 张
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-6">
+                  <div className="bg-gradient-to-r from-slate-700 to-blue-800 rounded-xl p-5 text-white">
+                    <h4 className="text-sm font-semibold text-white/90 mb-3 flex items-center gap-2">
+                      <Filter className="w-4 h-4" />
+                      选择导出状态
+                    </h4>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {[
+                        { value: 'pending', label: '待处理', color: 'slate' },
+                        { value: 'processing', label: '处理中', color: 'blue' },
+                        { value: 'disputed', label: '有争议', color: 'amber' },
+                        { value: 'resolved', label: '已解决', color: 'emerald' },
+                      ].map((status) => (
+                          <label
+                            key={status.value}
+                            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-all ${
+                              disputeStatusFilter.includes(status.value)
+                                ? 'bg-white/20 border border-white/30'
+                                : 'bg-white/5 border border-transparent hover:bg-white/10'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={disputeStatusFilter.includes(status.value)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setDisputeStatusFilter((prev) => [...prev, status.value]);
+                                } else {
+                                  setDisputeStatusFilter((prev) =>
+                                    prev.filter((s) => s !== status.value)
+                                  );
+                                }
+                              }}
+                              className="w-4 h-4 rounded border-white/40 text-blue-500 focus:ring-blue-400 focus:ring-offset-0 bg-white/20"
+                            />
+                            <span className="text-sm font-medium">{status.label}</span>
+                          </label>
+                        ))}
+                    </div>
+                  </div>
+
                   <div className="bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl p-5 text-white">
                     <div className="flex items-center gap-4">
                       <div className="w-14 h-14 rounded-xl bg-white/20 flex items-center justify-center">
@@ -770,10 +1082,24 @@ export default function ExportPage() {
 
             <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between flex-shrink-0">
               <div className="text-sm text-slate-500">
-                <span className="text-emerald-600 font-medium">
-                  {exportType === 'payment' ? paymentExportData.count : disputeExportData.count}
-                </span>
-                条记录将被导出为 Excel 文件
+                {exportType === 'payment' ? (
+                  <>
+                    <span className="text-blue-600 font-medium">
+                      {paymentReviewData.selectedCount}
+                    </span>
+                    张账单将被确认并导出为 Excel 文件，合计金额
+                    <span className="text-blue-600 font-medium ml-1">
+                      {paymentReviewData.selectedAmount.toLocaleString()}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-amber-600 font-medium">
+                      {disputeExportData.count}
+                    </span>
+                    条记录将被导出为 Excel 文件
+                  </>
+                )}
               </div>
               <div className="flex items-center gap-3">
                 <button
@@ -784,8 +1110,8 @@ export default function ExportPage() {
                 </button>
                 <button
                   onClick={exportType === 'payment' ? handleExportPaymentList : handleExportDisputeList}
-                  disabled={exportType === 'payment' ? paymentExportData.count === 0 : disputeExportData.count === 0}
-                  className="px-6 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 text-white text-sm font-medium rounded-lg hover:from-cyan-600 hover:to-blue-600 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={exportType === 'payment' ? paymentReviewData.selectedCount === 0 : disputeExportData.count === 0}
+                  className="px-6 py-2 bg-gradient-to-r from-slate-700 to-blue-800 text-white text-sm font-medium rounded-lg hover:from-slate-800 hover:to-blue-900 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-500/25"
                 >
                   <Download className="w-4 h-4" />
                   确认导出

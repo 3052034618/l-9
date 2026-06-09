@@ -311,6 +311,7 @@ export const mockDiscrepancies: Discrepancy[] = [];
 export const mockOperationLogs: OperationLog[] = [
   {
     id: 'log-001',
+    batchId: 'batch-initial',
     operationType: '文件导入',
     operator: '张财务',
     description: '导入航次明细文件',
@@ -319,6 +320,7 @@ export const mockOperationLogs: OperationLog[] = [
   },
   {
     id: 'log-002',
+    batchId: 'batch-initial',
     operationType: '文件导入',
     operator: '张财务',
     description: '导入港杂费文件',
@@ -327,6 +329,7 @@ export const mockOperationLogs: OperationLog[] = [
   },
   {
     id: 'log-003',
+    batchId: 'batch-initial',
     operationType: '文件导入',
     operator: '张财务',
     description: '导入燃油附加费文件',
@@ -335,6 +338,7 @@ export const mockOperationLogs: OperationLog[] = [
   },
   {
     id: 'log-004',
+    batchId: 'batch-initial',
     operationType: '文件导入',
     operator: '张财务',
     description: '导入承运商账单文件',

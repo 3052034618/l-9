@@ -96,11 +96,21 @@ export interface MatchingResult {
 
 export interface OperationLog {
   id: string;
+  batchId: string;
   operationType: string;
   operator: string;
   description: string;
   detail: string;
   createdAt: string;
+}
+
+export interface ReconciliationBatch {
+  id: string;
+  name: string;
+  status: 'draft' | 'processing' | 'completed';
+  createdAt: string;
+  updatedAt: string;
+  remark: string;
 }
 
 export interface PaymentListItem {

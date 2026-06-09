@@ -12,29 +12,44 @@ import {
   UploadedFile,
   AppStats,
   TransportType,
+  ReconciliationBatch,
+  DiscrepancyStatus,
 } from '../types';
 import {
   mockVoyageDetails,
   mockPortFees,
   mockBunkerFees,
   mockCarrierBills,
-  mockOperationLogs,
   defaultMatchingRules,
 } from '../mock/data';
 
-interface AppState {
+interface BatchData {
   voyageDetails: VoyageDetail[];
   portFees: PortFee[];
   bunkerFees: BunkerFee[];
   carrierBills: CarrierBill[];
   matchingResults: MatchingResult[];
   discrepancies: Discrepancy[];
+  uploadedFiles: UploadedFile[];
+}
+
+interface AppState {
+  currentBatchId: string;
+  batches: ReconciliationBatch[];
+  batchDataMap: Record<string, BatchData>;
   operationLogs: OperationLog[];
   matchingRules: MatchingRules;
-  uploadedFiles: UploadedFile[];
   matchingProgress: number;
   isMatching: boolean;
   _hasHydrated: boolean;
+
+  voyageDetails: VoyageDetail[];
+  portFees: PortFee[];
+  bunkerFees: BunkerFee[];
+  carrierBills: CarrierBill[];
+  matchingResults: MatchingResult[];
+  discrepancies: Discrepancy[];
+  uploadedFiles: UploadedFile[];
 
   setVoyageDetails: (data: VoyageDetail[]) => void;
   setPortFees: (data: PortFee[]) => void;
@@ -42,10 +57,18 @@ interface AppState {
   setCarrierBills: (data: CarrierBill[]) => void;
   setMatchingRules: (rules: MatchingRules) => void;
   addUploadedFile: (file: UploadedFile) => void;
-  addOperationLog: (log: Omit<OperationLog, 'id' | 'createdAt'>) => void;
+  addOperationLog: (log: Omit<OperationLog, 'id' | 'createdAt' | 'batchId'>) => void;
+
+  createBatch: (name: string, remark?: string) => string;
+  switchBatch: (batchId: string) => void;
+  updateBatchName: (batchId: string, name: string) => void;
+  deleteBatch: (batchId: string) => void;
+  getCurrentBatch: () => ReconciliationBatch | undefined;
+
   runMatching: () => void;
   updateDiscrepancyComment: (id: string, comment: string) => void;
   updateDiscrepancyStatus: (id: string, status: string) => void;
+  batchUpdateDiscrepancies: (ids: string[], updates: { status?: string; comment?: string }) => void;
   confirmBills: (billIds: string[]) => void;
   manualMatch: (transportType: TransportType, transportId: string, billId: string) => void;
   mergeMatchingResults: (resultIds: string[]) => void;
@@ -71,7 +94,6 @@ const getFeeTypeLabel = (type: TransportType): string => {
 };
 
 const isFeeTypeMatch = (transportType: TransportType, billFeeType: string): boolean => {
-  const label = getFeeTypeLabel(transportType);
   if (!billFeeType) return true;
   const billLower = billFeeType.toLowerCase();
   if (transportType === 'voyage') {
@@ -86,33 +108,229 @@ const isFeeTypeMatch = (transportType: TransportType, billFeeType: string): bool
   return false;
 };
 
+const createEmptyBatchData = (): BatchData => ({
+  voyageDetails: [],
+  portFees: [],
+  bunkerFees: [],
+  carrierBills: [],
+  matchingResults: [],
+  discrepancies: [],
+  uploadedFiles: [],
+});
+
+const createInitialBatch = (): { batch: ReconciliationBatch; data: BatchData } => {
+  const id = generateId();
+  const now = new Date().toISOString();
+  const batch: ReconciliationBatch = {
+    id,
+    name: '初始对账批次',
+    status: 'draft',
+    createdAt: now,
+    updatedAt: now,
+    remark: '系统默认初始批次',
+  };
+  const data: BatchData = {
+    voyageDetails: mockVoyageDetails,
+    portFees: mockPortFees,
+    bunkerFees: mockBunkerFees,
+    carrierBills: mockCarrierBills,
+    matchingResults: [],
+    discrepancies: [],
+    uploadedFiles: [],
+  };
+  return { batch, data };
+};
+
+const { batch: initialBatch, data: initialData } = createInitialBatch();
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
-      voyageDetails: mockVoyageDetails,
-      portFees: mockPortFees,
-      bunkerFees: mockBunkerFees,
-      carrierBills: mockCarrierBills,
-      matchingResults: [],
-      discrepancies: [],
-      operationLogs: mockOperationLogs,
+      currentBatchId: initialBatch.id,
+      batches: [initialBatch],
+      batchDataMap: { [initialBatch.id]: initialData },
+      operationLogs: [],
       matchingRules: defaultMatchingRules,
-      uploadedFiles: [],
       matchingProgress: 0,
       isMatching: false,
       _hasHydrated: false,
 
+      voyageDetails: initialData.voyageDetails,
+      portFees: initialData.portFees,
+      bunkerFees: initialData.bunkerFees,
+      carrierBills: initialData.carrierBills,
+      matchingResults: initialData.matchingResults,
+      discrepancies: initialData.discrepancies,
+      uploadedFiles: initialData.uploadedFiles,
+
       setHasHydrated: (v) => set({ _hasHydrated: v }),
 
-      setVoyageDetails: (data) => set({ voyageDetails: data }),
-      setPortFees: (data) => set({ portFees: data }),
-      setBunkerFees: (data) => set({ bunkerFees: data }),
-      setCarrierBills: (data) => set({ carrierBills: data }),
+      getCurrentBatch: () => {
+        const state = get();
+        return state.batches.find((b) => b.id === state.currentBatchId);
+      },
+
+      createBatch: (name, remark = '') => {
+        const id = generateId();
+        const now = new Date().toISOString();
+        const newBatch: ReconciliationBatch = {
+          id,
+          name,
+          status: 'draft',
+          createdAt: now,
+          updatedAt: now,
+          remark,
+        };
+        const newData = createEmptyBatchData();
+
+        set((state) => ({
+          batches: [...state.batches, newBatch],
+          batchDataMap: { ...state.batchDataMap, [id]: newData },
+          currentBatchId: id,
+          voyageDetails: newData.voyageDetails,
+          portFees: newData.portFees,
+          bunkerFees: newData.bunkerFees,
+          carrierBills: newData.carrierBills,
+          matchingResults: newData.matchingResults,
+          discrepancies: newData.discrepancies,
+          uploadedFiles: newData.uploadedFiles,
+        }));
+
+        get().addOperationLog({
+          operationType: '批次管理',
+          operator: '张财务',
+          description: '创建对账批次',
+          detail: `创建批次「${name}」`,
+        });
+
+        return id;
+      },
+
+      switchBatch: (batchId) => {
+        const state = get();
+        const batch = state.batches.find((b) => b.id === batchId);
+        if (!batch) return;
+
+        const data = state.batchDataMap[batchId] || createEmptyBatchData();
+
+        set({
+          currentBatchId: batchId,
+          voyageDetails: data.voyageDetails,
+          portFees: data.portFees,
+          bunkerFees: data.bunkerFees,
+          carrierBills: data.carrierBills,
+          matchingResults: data.matchingResults,
+          discrepancies: data.discrepancies,
+          uploadedFiles: data.uploadedFiles,
+        });
+
+        get().addOperationLog({
+          operationType: '批次管理',
+          operator: '张财务',
+          description: '切换对账批次',
+          detail: `切换到批次「${batch.name}」`,
+        });
+      },
+
+      updateBatchName: (batchId, name) => {
+        set((state) => ({
+          batches: state.batches.map((b) =>
+            b.id === batchId ? { ...b, name, updatedAt: new Date().toISOString() } : b
+          ),
+        }));
+      },
+
+      deleteBatch: (batchId) => {
+        set((state) => {
+          if (state.batches.length <= 1) return state;
+
+          const remainingBatches = state.batches.filter((b) => b.id !== batchId);
+          const newMap = { ...state.batchDataMap };
+          delete newMap[batchId];
+
+          const newCurrentId = state.currentBatchId === batchId
+            ? remainingBatches[remainingBatches.length - 1].id
+            : state.currentBatchId;
+
+          const newData = newMap[newCurrentId] || createEmptyBatchData();
+          const newLogs = state.operationLogs.filter((l) => l.batchId !== batchId);
+
+          return {
+            batches: remainingBatches,
+            batchDataMap: newMap,
+            currentBatchId: newCurrentId,
+            operationLogs: newLogs,
+            voyageDetails: newData.voyageDetails,
+            portFees: newData.portFees,
+            bunkerFees: newData.bunkerFees,
+            carrierBills: newData.carrierBills,
+            matchingResults: newData.matchingResults,
+            discrepancies: newData.discrepancies,
+            uploadedFiles: newData.uploadedFiles,
+          };
+        });
+      },
+
+      setVoyageDetails: (data) =>
+        set((state) => ({
+          voyageDetails: data,
+          batchDataMap: {
+            ...state.batchDataMap,
+            [state.currentBatchId]: {
+              ...state.batchDataMap[state.currentBatchId],
+              voyageDetails: data,
+            },
+          },
+        })),
+
+      setPortFees: (data) =>
+        set((state) => ({
+          portFees: data,
+          batchDataMap: {
+            ...state.batchDataMap,
+            [state.currentBatchId]: {
+              ...state.batchDataMap[state.currentBatchId],
+              portFees: data,
+            },
+          },
+        })),
+
+      setBunkerFees: (data) =>
+        set((state) => ({
+          bunkerFees: data,
+          batchDataMap: {
+            ...state.batchDataMap,
+            [state.currentBatchId]: {
+              ...state.batchDataMap[state.currentBatchId],
+              bunkerFees: data,
+            },
+          },
+        })),
+
+      setCarrierBills: (data) =>
+        set((state) => ({
+          carrierBills: data,
+          batchDataMap: {
+            ...state.batchDataMap,
+            [state.currentBatchId]: {
+              ...state.batchDataMap[state.currentBatchId],
+              carrierBills: data,
+            },
+          },
+        })),
+
       setMatchingRules: (rules) => set({ matchingRules: rules }),
 
       addUploadedFile: (file) =>
         set((state) => ({
           uploadedFiles: [...state.uploadedFiles, file],
+          batchDataMap: {
+            ...state.batchDataMap,
+            [state.currentBatchId]: {
+              ...state.batchDataMap[state.currentBatchId],
+              uploadedFiles: [...state.batchDataMap[state.currentBatchId].uploadedFiles, file],
+            },
+          },
         })),
 
       addOperationLog: (log) =>
@@ -121,6 +339,7 @@ export const useAppStore = create<AppState>()(
             {
               ...log,
               id: generateId(),
+              batchId: state.currentBatchId,
               createdAt: new Date().toISOString(),
             },
             ...state.operationLogs,
@@ -352,11 +571,21 @@ export const useAppStore = create<AppState>()(
           set({ matchingProgress: 100 });
 
           setTimeout(() => {
+            const state = get();
             set({
               matchingResults: results,
               discrepancies: discList,
               carrierBills: updatedBills,
               isMatching: false,
+              batchDataMap: {
+                ...state.batchDataMap,
+                [state.currentBatchId]: {
+                  ...state.batchDataMap[state.currentBatchId],
+                  matchingResults: results,
+                  discrepancies: discList,
+                  carrierBills: updatedBills,
+                },
+              },
             });
 
             get().addOperationLog({
@@ -371,52 +600,129 @@ export const useAppStore = create<AppState>()(
 
       updateDiscrepancyComment: (id, comment) =>
         set((state) => {
-          const disc = state.discrepancies.find((d) => d.id === id);
+          const updated = state.discrepancies.map((d) =>
+            d.id === id ? { ...d, comment } : d
+          );
           return {
-            discrepancies: state.discrepancies.map((d) =>
-              d.id === id ? { ...d, comment } : d
-            ),
+            discrepancies: updated,
+            batchDataMap: {
+              ...state.batchDataMap,
+              [state.currentBatchId]: {
+                ...state.batchDataMap[state.currentBatchId],
+                discrepancies: updated,
+              },
+            },
           };
         }),
 
-      updateDiscrepancyStatus: (id, status) =>
-        set((state) => {
-          const disc = state.discrepancies.find((d) => d.id === id);
-          const oldStatus = disc?.status || '';
-          const newStatus = status as any;
+      updateDiscrepancyStatus: (id, status) => {
+        const state = get();
+        const disc = state.discrepancies.find((d) => d.id === id);
+        const newStatus = status as DiscrepancyStatus;
 
-          let updatedBills = state.carrierBills;
-          if (disc && disc.matchingResultId) {
+        let updatedBills = state.carrierBills;
+        if (disc && disc.matchingResultId) {
+          const result = state.matchingResults.find((r) => r.id === disc.matchingResultId);
+          if (result && result.carrierBillId) {
+            if (newStatus === 'resolved') {
+              const otherDiscsForBill = state.discrepancies.filter(
+                (d) =>
+                  d.id !== id &&
+                  d.matchingResultId &&
+                  state.matchingResults.find((r) => r.id === d.matchingResultId)?.carrierBillId === result.carrierBillId &&
+                  d.status !== 'resolved'
+              );
+              if (otherDiscsForBill.length === 0) {
+                updatedBills = state.carrierBills.map((b) =>
+                  b.id === result.carrierBillId ? { ...b, status: 'matched' as const } : b
+                );
+              }
+            } else if (newStatus === 'disputed' || newStatus === 'processing') {
+              updatedBills = state.carrierBills.map((b) =>
+                b.id === result.carrierBillId ? { ...b, status: 'discrepancy' as const } : b
+              );
+            }
+          }
+        }
+
+        const updatedDiscs = state.discrepancies.map((d) =>
+          d.id === id ? { ...d, status: newStatus } : d
+        );
+
+        set({
+          discrepancies: updatedDiscs,
+          carrierBills: updatedBills,
+          batchDataMap: {
+            ...state.batchDataMap,
+            [state.currentBatchId]: {
+              ...state.batchDataMap[state.currentBatchId],
+              discrepancies: updatedDiscs,
+              carrierBills: updatedBills,
+            },
+          },
+        });
+      },
+
+      batchUpdateDiscrepancies: (ids, updates) => {
+        const state = get();
+        let updatedDiscs = [...state.discrepancies];
+        let updatedBills = [...state.carrierBills];
+
+        ids.forEach((id) => {
+          const disc = updatedDiscs.find((d) => d.id === id);
+          if (!disc) return;
+
+          if (updates.status !== undefined) {
+            disc.status = updates.status as DiscrepancyStatus;
+          }
+          if (updates.comment !== undefined) {
+            disc.comment = updates.comment;
+          }
+
+          if (updates.status && disc.matchingResultId) {
             const result = state.matchingResults.find((r) => r.id === disc.matchingResultId);
             if (result && result.carrierBillId) {
-              if (newStatus === 'resolved') {
-                const otherDiscsForBill = state.discrepancies.filter(
-                  (d) =>
-                    d.id !== id &&
-                    d.matchingResultId &&
-                    state.matchingResults.find((r) => r.id === d.matchingResultId)?.carrierBillId === result.carrierBillId &&
-                    d.status !== 'resolved'
-                );
-                if (otherDiscsForBill.length === 0) {
-                  updatedBills = state.carrierBills.map((b) =>
-                    b.id === result.carrierBillId ? { ...b, status: 'matched' as const } : b
-                  );
+              const billId = result.carrierBillId;
+              const newStatus = updates.status as DiscrepancyStatus;
+
+              const otherDiscsForBill = updatedDiscs.filter(
+                (d) =>
+                  d.id !== id &&
+                  d.matchingResultId &&
+                  state.matchingResults.find((r) => r.id === d.matchingResultId)?.carrierBillId === billId &&
+                  d.status !== 'resolved'
+              );
+
+              const billIdx = updatedBills.findIndex((b) => b.id === billId);
+              if (billIdx >= 0) {
+                if (newStatus === 'resolved' && otherDiscsForBill.length === 0) {
+                  updatedBills[billIdx] = { ...updatedBills[billIdx], status: 'matched' as const };
+                } else if (newStatus === 'disputed' || newStatus === 'processing') {
+                  updatedBills[billIdx] = { ...updatedBills[billIdx], status: 'discrepancy' as const };
                 }
-              } else if (newStatus === 'disputed' || newStatus === 'processing') {
-                updatedBills = state.carrierBills.map((b) =>
-                  b.id === result.carrierBillId ? { ...b, status: 'discrepancy' as const } : b
-                );
               }
             }
           }
+        });
 
-          return {
-            discrepancies: state.discrepancies.map((d) =>
-              d.id === id ? { ...d, status: newStatus } : d
-            ),
-            carrierBills: updatedBills,
-          };
-        }),
+        updatedDiscs = updatedDiscs.map((d) => {
+          const match = state.discrepancies.find((orig) => orig.id === d.id);
+          return match ? { ...match, ...d } : d;
+        });
+
+        set({
+          discrepancies: updatedDiscs,
+          carrierBills: updatedBills,
+          batchDataMap: {
+            ...state.batchDataMap,
+            [state.currentBatchId]: {
+              ...state.batchDataMap[state.currentBatchId],
+              discrepancies: updatedDiscs,
+              carrierBills: updatedBills,
+            },
+          },
+        });
+      },
 
       confirmBills: (billIds) =>
         set((state) => {
@@ -428,7 +734,17 @@ export const useAppStore = create<AppState>()(
           const updatedBills = state.carrierBills.map((bill) =>
             confirmableIds.includes(bill.id) ? { ...bill, status: 'confirmed' as const } : bill
           );
-          return { carrierBills: updatedBills };
+
+          return {
+            carrierBills: updatedBills,
+            batchDataMap: {
+              ...state.batchDataMap,
+              [state.currentBatchId]: {
+                ...state.batchDataMap[state.currentBatchId],
+                carrierBills: updatedBills,
+              },
+            },
+          };
         }),
 
       manualMatch: (transportType, transportId, billId) => {
@@ -452,11 +768,23 @@ export const useAppStore = create<AppState>()(
           const bill = state.carrierBills.find((b) => b.id === billId);
           const updatedBill = bill ? { ...bill, status: 'matched' as const } : bill;
 
+          const updatedBills = state.carrierBills.map((b) =>
+            b.id === billId ? updatedBill || b : b
+          );
+
+          const newResults = [...oldResults, newResult];
+
           return {
-            matchingResults: [...oldResults, newResult],
-            carrierBills: state.carrierBills.map((b) =>
-              b.id === billId ? updatedBill || b : b
-            ),
+            matchingResults: newResults,
+            carrierBills: updatedBills,
+            batchDataMap: {
+              ...state.batchDataMap,
+              [state.currentBatchId]: {
+                ...state.batchDataMap[state.currentBatchId],
+                matchingResults: newResults,
+                carrierBills: updatedBills,
+              },
+            },
           };
         });
 
@@ -494,10 +822,22 @@ export const useAppStore = create<AppState>()(
             ...d,
             matchingResultId: mergedResult.id,
           }));
+          mergedResult.discrepancies = newDiscs;
+
+          const finalDiscs = [...updatedDiscrepancies, ...newDiscs];
+          const finalResults = [...remainingResults, mergedResult];
 
           return {
-            matchingResults: [...remainingResults, mergedResult],
-            discrepancies: [...updatedDiscrepancies, ...newDiscs],
+            matchingResults: finalResults,
+            discrepancies: finalDiscs,
+            batchDataMap: {
+              ...state.batchDataMap,
+              [state.currentBatchId]: {
+                ...state.batchDataMap[state.currentBatchId],
+                matchingResults: finalResults,
+                discrepancies: finalDiscs,
+              },
+            },
           };
         });
 
@@ -560,10 +900,21 @@ export const useAppStore = create<AppState>()(
             }
           }
 
+          const finalResults = [...remainingResults, transportResult, billResult];
+
           return {
-            matchingResults: [...remainingResults, transportResult, billResult],
+            matchingResults: finalResults,
             discrepancies: remainingDiscs,
             carrierBills: updatedBills,
+            batchDataMap: {
+              ...state.batchDataMap,
+              [state.currentBatchId]: {
+                ...state.batchDataMap[state.currentBatchId],
+                matchingResults: finalResults,
+                discrepancies: remainingDiscs,
+                carrierBills: updatedBills,
+              },
+            },
           };
         });
 
@@ -600,16 +951,21 @@ export const useAppStore = create<AppState>()(
       },
 
       resetToMockData: () => {
+        const { batch: newBatch, data: newData } = createInitialBatch();
+
         set({
-          voyageDetails: mockVoyageDetails,
-          portFees: mockPortFees,
-          bunkerFees: mockBunkerFees,
-          carrierBills: mockCarrierBills,
-          matchingResults: [],
-          discrepancies: [],
-          operationLogs: mockOperationLogs,
+          currentBatchId: newBatch.id,
+          batches: [newBatch],
+          batchDataMap: { [newBatch.id]: newData },
+          operationLogs: [],
+          voyageDetails: newData.voyageDetails,
+          portFees: newData.portFees,
+          bunkerFees: newData.bunkerFees,
+          carrierBills: newData.carrierBills,
+          matchingResults: newData.matchingResults,
+          discrepancies: newData.discrepancies,
+          uploadedFiles: newData.uploadedFiles,
           matchingRules: defaultMatchingRules,
-          uploadedFiles: [],
         });
       },
     }),
@@ -617,14 +973,17 @@ export const useAppStore = create<AppState>()(
       name: 'water-freight-audit-storage',
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
+        currentBatchId: state.currentBatchId,
+        batches: state.batches,
+        batchDataMap: state.batchDataMap,
+        operationLogs: state.operationLogs,
+        matchingRules: state.matchingRules,
         voyageDetails: state.voyageDetails,
         portFees: state.portFees,
         bunkerFees: state.bunkerFees,
         carrierBills: state.carrierBills,
         matchingResults: state.matchingResults,
         discrepancies: state.discrepancies,
-        operationLogs: state.operationLogs,
-        matchingRules: state.matchingRules,
         uploadedFiles: state.uploadedFiles,
       }),
       onRehydrateStorage: () => (state) => {
