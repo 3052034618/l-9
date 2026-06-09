@@ -854,64 +854,76 @@ export const useAppStore = create<AppState>()(
           const result = state.matchingResults.find((r) => r.id === resultId);
           if (!result || !result.carrierBillId) return state;
 
+          const billId = result.carrierBillId;
+          const transportId = result.transportRecordId;
+          const transportType = result.transportType;
+
           const remainingResults = state.matchingResults.filter((r) => r.id !== resultId);
 
           const transportResult: MatchingResult = {
-            ...result,
             id: generateId(),
+            transportType,
+            transportRecordId: transportId,
             carrierBillId: '',
             matchScore: 0,
             status: 'pending',
             discrepancies: [],
+            matchedAt: new Date().toISOString(),
             manualAdjusted: true,
           };
 
           const billResult: MatchingResult = {
-            ...result,
             id: generateId(),
+            transportType,
             transportRecordId: '',
+            carrierBillId: billId,
             matchScore: 0,
             status: 'pending',
             discrepancies: [],
+            matchedAt: new Date().toISOString(),
             manualAdjusted: true,
           };
 
-          const removedDiscIds = result.discrepancies.map((d) => d.id);
-          const remainingDiscs = state.discrepancies.filter(
-            (d) => !removedDiscIds.includes(d.id)
-          );
+          const allResultsAfter = [...remainingResults, transportResult, billResult];
 
-          const bill = state.carrierBills.find((b) => b.id === result.carrierBillId);
-          let updatedBills = state.carrierBills;
-          if (bill) {
-            const otherMatches = remainingResults.filter(
-              (r) => r.carrierBillId === bill.id && r.id !== resultId
+          const removedDiscIds = new Set(result.discrepancies.map((d) => d.id));
+
+          const updatedDiscs = state.discrepancies.filter((disc) => {
+            if (!removedDiscIds.has(disc.id)) return true;
+
+            const isStillReferenced = allResultsAfter.some(
+              (r) => r.discrepancies.some((rd) => rd.id === disc.id)
             );
-            if (otherMatches.length === 0) {
-              const hasUnresolvedDisc = remainingDiscs.some(
-                (d) =>
-                  d.matchingResultId &&
-                  state.matchingResults.find((r) => r.id === d.matchingResultId)?.carrierBillId === bill.id &&
-                  d.status !== 'resolved'
-              );
-              updatedBills = state.carrierBills.map((b) =>
-                b.id === bill.id ? { ...b, status: hasUnresolvedDisc ? 'discrepancy' as const : 'pending' as const } : b
-              );
-            }
+            return isStillReferenced;
+          });
+
+          const billMatches = allResultsAfter.filter((r) => r.carrierBillId === billId);
+
+          let newBillStatus: 'pending' | 'matched' | 'discrepancy' | 'confirmed' = 'pending';
+          if (billMatches.length > 0) {
+            const hasUnresolvedDisc = billMatches.some((r) =>
+              r.discrepancies.some((d) => {
+                const fullDisc = updatedDiscs.find((dd) => dd.id === d.id);
+                return fullDisc && fullDisc.status !== 'resolved';
+              })
+            );
+            newBillStatus = hasUnresolvedDisc ? 'discrepancy' : 'matched';
           }
 
-          const finalResults = [...remainingResults, transportResult, billResult];
+          const updatedBills = state.carrierBills.map((b) =>
+            b.id === billId ? { ...b, status: newBillStatus } : b
+          );
 
           return {
-            matchingResults: finalResults,
-            discrepancies: remainingDiscs,
+            matchingResults: allResultsAfter,
+            discrepancies: updatedDiscs,
             carrierBills: updatedBills,
             batchDataMap: {
               ...state.batchDataMap,
               [state.currentBatchId]: {
                 ...state.batchDataMap[state.currentBatchId],
-                matchingResults: finalResults,
-                discrepancies: remainingDiscs,
+                matchingResults: allResultsAfter,
+                discrepancies: updatedDiscs,
                 carrierBills: updatedBills,
               },
             },
@@ -922,7 +934,7 @@ export const useAppStore = create<AppState>()(
           operationType: '拆分匹配',
           operator: '张财务',
           description: '拆分匹配结果',
-          detail: `拆分了匹配记录${resultId}，原差异已移除，账单回到待处理`,
+          detail: `拆分了匹配记录${resultId}，原差异已移除，账单状态已同步更新`,
         });
       },
 

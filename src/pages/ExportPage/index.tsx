@@ -289,30 +289,75 @@ export default function ExportPage() {
     const billIds = billsToExport.map((b) => b.id);
     confirmBills(billIds);
 
-    const exportData = billsToExport.map((bill) => ({
-      账单号: bill.billNumber,
-      承运商: bill.carrierName,
-      船名: bill.vesselName,
-      航次号: bill.voyageNumber,
-      费用类型: bill.feeType,
-      装货港: bill.loadingPort,
-      卸货港: bill.dischargePort,
-      币种: bill.currency,
-      金额: bill.totalAmount,
-      确认日期: new Date().toLocaleDateString('zh-CN'),
-    }));
+    const groups = new Map<string, CarrierBill[]>();
+    billsToExport.forEach((bill) => {
+      const key = `${bill.carrierName}_${bill.currency}`;
+      if (!groups.has(key)) {
+        groups.set(key, []);
+      }
+      groups.get(key)!.push(bill);
+    });
 
-    const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, '付款清单');
+
+    let allSummary: any[] = [];
+    let grandTotal = 0;
+
+    groups.forEach((bills, key) => {
+      const [carrierName, currency] = key.split('_');
+
+      const exportData = bills.map((bill) => ({
+        账单号: bill.billNumber,
+        承运商: bill.carrierName,
+        船名: bill.vesselName,
+        航次号: bill.voyageNumber,
+        费用类型: bill.feeType,
+        装货港: bill.loadingPort,
+        卸货港: bill.dischargePort,
+        币种: bill.currency,
+        金额: bill.totalAmount,
+        确认日期: new Date().toLocaleDateString('zh-CN'),
+      }));
+
+      const sheetName = `${carrierName.slice(0, 10)}_${currency}`;
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+      const groupTotal = bills.reduce((sum, b) => sum + b.totalAmount, 0);
+      allSummary.push({
+        承运商: carrierName,
+        币种: currency,
+        账单数量: bills.length,
+        合计金额: groupTotal,
+      });
+      grandTotal += groupTotal;
+    });
+
+    allSummary.push({
+      承运商: '总计',
+      币种: '-',
+      账单数量: billsToExport.length,
+      合计金额: grandTotal,
+    });
+
+    const summaryWs = XLSX.utils.json_to_sheet(allSummary);
+    XLSX.utils.book_append_sheet(wb, summaryWs, '汇总');
+
     XLSX.writeFile(wb, `付款清单_${new Date().toISOString().split('T')[0]}.xlsx`);
 
-    const totalAmount = billsToExport.reduce((sum, b) => sum + b.totalAmount, 0);
+    const groupDescriptions = Array.from(groups.entries())
+      .map(([key, bills]) => {
+        const [carrierName, currency] = key.split('_');
+        const total = bills.reduce((sum, b) => sum + b.totalAmount, 0);
+        return `${carrierName}(${currency}):${bills.length}张/${total.toLocaleString()}`;
+      })
+      .join('；');
+
     addOperationLog({
       operationType: '导出',
       operator: '张财务',
       description: '导出付款清单',
-      detail: `导出${billsToExport.length}条付款记录，合计金额${totalAmount.toLocaleString()}`,
+      detail: `导出${billsToExport.length}条付款记录，${groups.size}个分组（${groupDescriptions}）`,
     });
 
     setShowExportModal(false);

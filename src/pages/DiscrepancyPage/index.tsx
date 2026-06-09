@@ -196,7 +196,9 @@ export default function DiscrepancyPage() {
   })();
 
   const drilldownDiscrepancies = drilldownFilter
-    ? filteredDiscrepancies.filter((d) => {
+    ? discrepancies.filter((d) => {
+        if (d.status === 'resolved') return false;
+
         if (drilldownFilter.field === 'carrier') {
           return getDiscrepancyCarrier(d) === drilldownFilter.value;
         }
